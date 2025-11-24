@@ -1,4 +1,3 @@
-import mysql from "mysql2/promise";
 import { readdir, readFile, stat } from "fs/promises";
 import { join, extname } from "path";
 import { createHash } from "crypto";
