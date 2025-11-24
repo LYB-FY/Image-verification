@@ -73,18 +73,6 @@ async function importImages() {
         console.log(`处理文件: ${fileName}...`);
         const md5 = await calculateMD5(filePath);
 
-        // 检查是否已存在（根据 MD5）
-        const [existing] = await connection.execute<mysql.RowDataPacket[]>(
-          "SELECT id FROM tb_image WHERE md5 = ?",
-          [md5]
-        );
-
-        if (existing.length > 0) {
-          console.log(`  ⚠️  文件已存在（MD5: ${md5}），跳过\n`);
-          skipCount++;
-          continue;
-        }
-
         // 生成 id
         const id = generateId();
 
