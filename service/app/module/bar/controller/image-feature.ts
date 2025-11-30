@@ -200,6 +200,90 @@ export class ImageFeatureController {
     }
   }
 
+  // 搜索相似图片：通过图片ID或URL
+  @HTTPMethod({
+    method: HTTPMethodEnum.GET,
+    path: "/search-by-id-or-url",
+  })
+  async searchByIdOrUrl(
+    @HTTPQuery({ name: "imageId" }) imageId?: string,
+    @HTTPQuery({ name: "imageUrl" }) imageUrl?: string,
+    @HTTPQuery({ name: "threshold" }) threshold?: string
+  ) {
+    try {
+      // 相似度阈值，默认 0.8（80%）
+      const similarityThreshold =
+        threshold !== undefined ? parseFloat(threshold) : 0.8;
+
+      // 验证相似度阈值
+      if (
+        isNaN(similarityThreshold) ||
+        similarityThreshold < 0 ||
+        similarityThreshold > 1
+      ) {
+        return {
+          success: false,
+          message: "相似度阈值必须在0-1之间",
+        };
+      }
+
+      // 验证参数：必须提供 imageId 或 imageUrl 之一
+      if (!imageId && !imageUrl) {
+        return {
+          success: false,
+          message: "请提供 imageId 或 imageUrl 参数",
+        };
+      }
+
+      let similarImages;
+      let queryInfo: { type: string; value: string };
+
+      if (imageId) {
+        // 根据图片ID搜索
+        this.logger.info(
+          `[ImageFeatureController] 根据图片ID搜索相似图片: ${imageId}`
+        );
+        similarImages = await this.imageFeatureService.searchSimilarImagesByImageId(
+          imageId,
+          similarityThreshold
+        );
+        queryInfo = { type: "imageId", value: imageId };
+      } else {
+        // 根据图片URL搜索
+        this.logger.info(
+          `[ImageFeatureController] 根据图片URL搜索相似图片: ${imageUrl}`
+        );
+        similarImages = await this.imageFeatureService.searchSimilarImagesByUrl(
+          imageUrl!,
+          similarityThreshold
+        );
+        queryInfo = { type: "imageUrl", value: imageUrl! };
+      }
+
+      return {
+        success: true,
+        message: `找到 ${similarImages.length} 张相似图片（相似度 >= ${(
+          similarityThreshold * 100
+        ).toFixed(0)}%）`,
+        data: {
+          query: queryInfo,
+          count: similarImages.length,
+          threshold: similarityThreshold,
+          images: similarImages,
+        },
+      };
+    } catch (error: any) {
+      this.logger.error(
+        "[ImageFeatureController] 根据ID或URL搜索相似图片失败:",
+        error
+      );
+      return {
+        success: false,
+        message: error.message || "搜索相似图片失败",
+      };
+    }
+  }
+
   // 搜索相似图片：接收图片（base64 字符串或文件上传），返回相似度大于90%的图片信息
   @HTTPMethod({
     method: HTTPMethodEnum.POST,

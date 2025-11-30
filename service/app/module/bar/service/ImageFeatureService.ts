@@ -443,6 +443,168 @@ export class ImageFeatureService {
     return Math.max(0, Math.min(1, similarity));
   }
 
+  // 根据图片ID搜索相似图片
+  async searchSimilarImagesByImageId(
+    imageId: string,
+    similarityThreshold: number = 0.8
+  ): Promise<
+    Array<{
+      imageId: string;
+      url: string;
+      similarity: number;
+      md5?: string;
+      fileType?: number;
+    }>
+  > {
+    let connection;
+    try {
+      connection = await createDbConnection();
+
+      // 查询指定图片的特征向量
+      const [features] = await connection.execute<mysql.RowDataPacket[]>(
+        `SELECT feature_vector 
+         FROM tb_hsx_img_value 
+         WHERE CAST(image_id AS CHAR) = ?`,
+        [imageId]
+      );
+
+      if (features.length === 0) {
+        throw new Error(`图片 ID ${imageId} 的特征向量不存在，请先处理该图片`);
+      }
+
+      // 解析特征向量
+      const featureVector =
+        typeof features[0].feature_vector === "string"
+          ? JSON.parse(features[0].feature_vector)
+          : features[0].feature_vector;
+
+      const queryTensor = tf.tensor1d(featureVector);
+
+      // 查询所有其他图片的特征向量
+      const [allFeatures] = await connection.execute<mysql.RowDataPacket[]>(
+        `SELECT 
+          CAST(f.image_id AS CHAR) as image_id,
+          f.feature_vector,
+          i.url,
+          i.md5,
+          i.file_type
+         FROM tb_hsx_img_value f
+         INNER JOIN tb_image i ON CAST(f.image_id AS CHAR) = CAST(i.id AS CHAR)
+         WHERE CAST(f.image_id AS CHAR) != ?
+         ORDER BY f.image_id`,
+        [imageId]
+      );
+
+      this.logger.info(
+        `[ImageFeatureService] 找到 ${allFeatures.length} 个特征向量，开始计算相似度...`
+      );
+
+      if (allFeatures.length === 0) {
+        queryTensor.dispose();
+        return [];
+      }
+
+      // 计算相似度并筛选
+      const similarImages: Array<{
+        imageId: string;
+        url: string;
+        similarity: number;
+        md5?: string;
+        fileType?: number;
+      }> = [];
+
+      for (const row of allFeatures) {
+        try {
+          // 解析特征向量
+          const vector =
+            typeof row.feature_vector === "string"
+              ? JSON.parse(row.feature_vector)
+              : row.feature_vector;
+
+          // 转换为 Tensor
+          const dbTensor = tf.tensor1d(vector);
+
+          // 计算相似度
+          const similarity = this.cosineSimilarity(queryTensor, dbTensor);
+
+          // 清理 Tensor
+          dbTensor.dispose();
+
+          // 如果相似度大于阈值，添加到结果中
+          if (similarity >= similarityThreshold) {
+            similarImages.push({
+              imageId: row.image_id,
+              url: row.url,
+              similarity: Math.round(similarity * 10000) / 100, // 保留两位小数，百分比形式
+              md5: row.md5,
+              fileType: row.file_type,
+            });
+          }
+        } catch (error: any) {
+          this.logger.warn(
+            `[ImageFeatureService] 计算图片 ${row.image_id} 相似度失败: ${error.message}`
+          );
+        }
+      }
+
+      // 清理查询 Tensor
+      queryTensor.dispose();
+
+      // 按相似度降序排序
+      similarImages.sort((a, b) => b.similarity - a.similarity);
+
+      this.logger.info(
+        `[ImageFeatureService] 找到 ${
+          similarImages.length
+        } 张相似图片（相似度 >= ${(similarityThreshold * 100).toFixed(0)}%）`
+      );
+
+      return similarImages;
+    } catch (error) {
+      this.logger.error(
+        "[ImageFeatureService] 根据图片ID搜索相似图片失败:",
+        error
+      );
+      throw error;
+    } finally {
+      if (connection) {
+        await connection.end();
+      }
+    }
+  }
+
+  // 根据图片URL搜索相似图片
+  async searchSimilarImagesByUrl(
+    imageUrl: string,
+    similarityThreshold: number = 0.8
+  ): Promise<
+    Array<{
+      imageId: string;
+      url: string;
+      similarity: number;
+      md5?: string;
+      fileType?: number;
+    }>
+  > {
+    try {
+      this.logger.info(
+        `[ImageFeatureService] 从 URL 加载图片并计算特征向量: ${imageUrl}`
+      );
+
+      // 从 URL 加载图片
+      const imageBuffer = await this.loadImageFromSource(imageUrl);
+
+      // 使用现有的 searchSimilarImages 方法
+      return await this.searchSimilarImages(imageBuffer, similarityThreshold);
+    } catch (error) {
+      this.logger.error(
+        "[ImageFeatureService] 根据URL搜索相似图片失败:",
+        error
+      );
+      throw error;
+    }
+  }
+
   // 搜索相似图片：接收图片 Buffer，返回相似度大于阈值的图片信息
   async searchSimilarImages(
     imageBuffer: Buffer,
