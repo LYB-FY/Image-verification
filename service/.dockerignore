@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+# package-lock.json - DO NOT IGNORE, needed for npm ci
+
+# Build outputs
+dist/
+.egg/
+run/
+
+# Logs
+logs/
+*.log
+
+# Testing
+coverage/
+test/
+*.test.ts
+*.test.js
+
+# Development files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+README.md
+*.md
+!DATABASE-CONFIG.md
+!ENV-EXAMPLE.md
+!QUICK-START-DB-CONFIG.md
+
+# Scripts (optional - keep if needed in production)
+scripts/
+
+# TypeScript config - tsconfig.json is needed for build!
+# tsconfig.json - DO NOT IGNORE
+vitest.config.ts
+
