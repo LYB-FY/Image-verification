@@ -20,6 +20,11 @@
     "clean": "tsc -b --clean",
     "prepublishOnly": "npm run clean && npm run build",
     "check-db": "tsx scripts/check-db.ts",
+    "check-postgres": "tsx scripts/check-postgres.ts",
+    "read-postgres-schema": "tsx scripts/read-postgres-schema.ts",
+    "create-postgres-tables": "tsx scripts/create-postgres-tables.ts",
+    "create-postgres-vector-table": "tsx scripts/create-postgres-vector-table.ts",
+    "import-all-images-to-vector": "tsx scripts/import-all-images-to-vector.ts",
     "import-images": "tsx scripts/import-images.ts",
     "query-images": "tsx scripts/query-images.ts",
     "create-feature-table": "tsx scripts/create-feature-table.ts",
@@ -37,7 +42,8 @@
     "egg": "beta",
     "egg-cors": "^3.0.1",
     "egg-sequelize": "^6.0.0",
-    "mysql2": "^3.15.3"
+    "mysql2": "^3.15.3",
+    "pg": "^8.13.1"
   },
   "devDependencies": {
     "@eggjs/bin": "beta",
@@ -45,6 +51,7 @@
     "@eggjs/tsconfig": "beta",
     "@oxc-node/core": "^0.0.32",
     "@types/node": "24",
+    "@types/pg": "^8.11.10",
     "@vitest/coverage-v8": "4",
     "cross-env": "10",
     "oxlint": "1",

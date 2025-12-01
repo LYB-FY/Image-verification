@@ -1,6 +1,6 @@
 import axios from "axios";
 import { createDbConnection } from "../app/utils/db.js";
-import mysql from "mysql2/promise";
+import { Client } from "pg";
 
 const API_BASE_URL = "http://127.0.0.1:7001/api/image-feature";
 
@@ -14,46 +14,46 @@ interface TestResult {
 
 // 从数据库获取一个图片ID
 async function getImageIdFromDatabase(): Promise<string | null> {
-  let connection;
+  let client: Client | undefined;
   try {
-    connection = await createDbConnection();
-    const [rows] = await connection.execute<mysql.RowDataPacket[]>(
-      "SELECT CAST(image_id AS CHAR) as image_id FROM tb_hsx_img_value LIMIT 1"
+    client = await createDbConnection();
+    const result = await client.query(
+      "SELECT image_id::text as image_id FROM tb_hsx_img_value LIMIT 1"
     );
 
-    if (rows.length > 0) {
-      return rows[0].image_id;
+    if (result.rows.length > 0) {
+      return result.rows[0].image_id;
     }
     return null;
   } catch (error) {
     console.error("从数据库获取图片ID失败:", error);
     return null;
   } finally {
-    if (connection) {
-      await connection.end();
+    if (client) {
+      await client.end();
     }
   }
 }
 
 // 从数据库获取一个图片URL
 async function getImageUrlFromDatabase(): Promise<string | null> {
-  let connection;
+  let client: Client | undefined;
   try {
-    connection = await createDbConnection();
-    const [rows] = await connection.execute<mysql.RowDataPacket[]>(
-      "SELECT i.url FROM tb_image i INNER JOIN tb_hsx_img_value f ON CAST(i.id AS CHAR) = CAST(f.image_id AS CHAR) LIMIT 1"
+    client = await createDbConnection();
+    const result = await client.query(
+      "SELECT i.url FROM tb_image i INNER JOIN tb_hsx_img_value f ON i.id::text = f.image_id::text LIMIT 1"
     );
 
-    if (rows.length > 0) {
-      return rows[0].url;
+    if (result.rows.length > 0) {
+      return result.rows[0].url;
     }
     return null;
   } catch (error) {
     console.error("从数据库获取图片URL失败:", error);
     return null;
   } finally {
-    if (connection) {
-      await connection.end();
+    if (client) {
+      await client.end();
     }
   }
 }

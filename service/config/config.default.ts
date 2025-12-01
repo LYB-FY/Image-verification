@@ -65,11 +65,21 @@ export default defineConfigFactory((appInfo) => {
     charset: "utf8mb4",
   };
 
+  // PostgreSQL database config
+  const postgres = {
+    host: "47.96.138.112",
+    port: 15432,
+    user: "postgres",
+    password: "EerwkVA@m-e9*CNW",
+    database: "postgres",
+  };
+
   // the return config will combines to EggAppConfig
   return {
     ...config,
     bizConfig,
     sequelize,
     mysql,
+    postgres,
   };
 });

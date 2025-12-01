@@ -4,7 +4,6 @@ import * as tf from "@tensorflow/tfjs";
 import * as mobilenet from "@tensorflow-models/mobilenet";
 import { createCanvas, loadImage } from "canvas";
 import axios from "axios";
-import mysql from "mysql2/promise";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import { createDbConnection } from "../../../utils/db.js";
@@ -291,34 +290,34 @@ export class ImageFeatureService {
 
   // 处理单个图片：读取数据库、计算特征、保存
   async processImage(imageId: bigint): Promise<void> {
-    let connection;
+    let client;
     try {
       // 连接数据库
-      connection = await createDbConnection();
+      client = await createDbConnection();
 
-      // 查询图片信息 - 使用字符串比较避免精度丢失
+      // 查询图片信息 - 使用字符串比较避免精度丢失，从 ecai 模式查询
       const imageIdStr = imageId.toString();
-      const [images] = await connection.execute<mysql.RowDataPacket[]>(
-        "SELECT CAST(id AS CHAR) as id, url FROM tb_image WHERE CAST(id AS CHAR) = ?",
+      const imagesResult = await client.query(
+        "SELECT id::text as id, url FROM ecai.tb_image WHERE id::text = $1",
         [imageIdStr]
       );
 
-      if (images.length === 0) {
+      if (imagesResult.rows.length === 0) {
         throw new Error(`图片 ID ${imageId} 不存在`);
       }
 
-      const image = images[0];
+      const image = imagesResult.rows[0];
       this.logger.info(
         `[ImageFeatureService] 处理图片 ID: ${imageId}, URL: ${image.url}`
       );
 
       // 检查是否已经计算过特征 - 使用字符串比较
-      const [existing] = await connection.execute<mysql.RowDataPacket[]>(
-        "SELECT id FROM tb_hsx_img_value WHERE CAST(image_id AS CHAR) = ?",
+      const existingResult = await client.query(
+        "SELECT id FROM tb_hsx_img_value WHERE image_id::text = $1",
         [imageIdStr]
       );
 
-      if (existing.length > 0) {
+      if (existingResult.rows.length > 0) {
         this.logger.info(
           `[ImageFeatureService] 图片 ID ${imageId} 的特征向量已存在，跳过`
         );
@@ -328,21 +327,18 @@ export class ImageFeatureService {
       // 计算特征向量
       const featureVector = await this.computeFeatureVector(image.url);
 
-      // 保存到数据库
-      await connection.execute(
+      // 保存到数据库 - 使用 vector 类型格式：'[1,2,3,...]'
+      // PostgreSQL vector 类型需要数组格式的字符串
+      const vectorString = `[${featureVector.join(",")}]`;
+      await client.query(
         `INSERT INTO tb_hsx_img_value 
          (image_id, feature_vector, vector_dimension, model_version) 
-         VALUES (?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE 
-         feature_vector = VALUES(feature_vector),
-         vector_dimension = VALUES(vector_dimension),
-         update_time = CURRENT_TIMESTAMP`,
-        [
-          imageId.toString(),
-          JSON.stringify(featureVector),
-          featureVector.length,
-          "MobileNetV2",
-        ]
+         VALUES ($1, $2::vector, $3, $4)
+         ON CONFLICT (image_id) DO UPDATE 
+         SET feature_vector = EXCLUDED.feature_vector,
+             vector_dimension = EXCLUDED.vector_dimension,
+             update_time = CURRENT_TIMESTAMP`,
+        [imageId.toString(), vectorString, featureVector.length, "MobileNetV2"]
       );
 
       this.logger.info(
@@ -352,8 +348,8 @@ export class ImageFeatureService {
       this.logger.error(`[ImageFeatureService] 处理图片失败:`, error);
       throw error;
     } finally {
-      if (connection) {
-        await connection.end();
+      if (client) {
+        await client.end();
       }
     }
   }
@@ -363,9 +359,9 @@ export class ImageFeatureService {
   async processImages(
     limit?: number
   ): Promise<{ success: number; failed: number }> {
-    let connection;
+    let client;
     try {
-      connection = await createDbConnection();
+      client = await createDbConnection();
 
       // 查询未处理过的图片 - 使用 CAST 确保 BIGINT 作为字符串返回
       // 如果 limit 未指定，则处理所有未处理的图片
@@ -373,27 +369,24 @@ export class ImageFeatureService {
       let params: any[];
 
       if (limit !== undefined && limit !== null) {
-        query = `SELECT CAST(i.id AS CHAR) as id, i.url 
-                 FROM tb_image i
-                 LEFT JOIN tb_hsx_img_value f ON CAST(i.id AS CHAR) = CAST(f.image_id AS CHAR)
+        query = `SELECT i.id::text as id, i.url 
+                 FROM ecai.tb_image i
+                 LEFT JOIN tb_hsx_img_value f ON i.id::text = f.image_id::text
                  WHERE f.id IS NULL
-                 LIMIT ?`;
+                 LIMIT $1`;
         params = [limit];
       } else {
-        query = `SELECT CAST(i.id AS CHAR) as id, i.url 
-                 FROM tb_image i
-                 LEFT JOIN tb_hsx_img_value f ON CAST(i.id AS CHAR) = CAST(f.image_id AS CHAR)
+        query = `SELECT i.id::text as id, i.url 
+                 FROM ecai.tb_image i
+                 LEFT JOIN tb_hsx_img_value f ON i.id::text = f.image_id::text
                  WHERE f.id IS NULL`;
         params = [];
       }
 
-      const [images] = await connection.execute<mysql.RowDataPacket[]>(
-        query,
-        params
-      );
+      const imagesResult = await client.query(query, params);
 
       this.logger.info(
-        `[ImageFeatureService] 找到 ${images.length} 张未处理的图片${
+        `[ImageFeatureService] 找到 ${imagesResult.rows.length} 张未处理的图片${
           limit ? `（限制 ${limit} 条）` : "（处理所有数据）"
         }`
       );
@@ -401,7 +394,7 @@ export class ImageFeatureService {
       let success = 0;
       let failed = 0;
 
-      for (const image of images) {
+      for (const image of imagesResult.rows) {
         try {
           // image.id 现在已经是字符串，直接转换为 BigInt
           await this.processImage(BigInt(image.id));
@@ -420,8 +413,8 @@ export class ImageFeatureService {
       this.logger.error("[ImageFeatureService] 批量处理失败:", error);
       throw error;
     } finally {
-      if (connection) {
-        await connection.end();
+      if (client) {
+        await client.end();
       }
     }
   }
@@ -456,50 +449,48 @@ export class ImageFeatureService {
       fileType?: number;
     }>
   > {
-    let connection;
+    let client;
     try {
-      connection = await createDbConnection();
+      client = await createDbConnection();
 
       // 查询指定图片的特征向量
-      const [features] = await connection.execute<mysql.RowDataPacket[]>(
-        `SELECT feature_vector 
+      const featuresResult = await client.query(
+        `SELECT feature_vector::text as feature_vector
          FROM tb_hsx_img_value 
-         WHERE CAST(image_id AS CHAR) = ?`,
+         WHERE image_id::text = $1`,
         [imageId]
       );
 
-      if (features.length === 0) {
+      if (featuresResult.rows.length === 0) {
         throw new Error(`图片 ID ${imageId} 的特征向量不存在，请先处理该图片`);
       }
 
-      // 解析特征向量
-      const featureVector =
-        typeof features[0].feature_vector === "string"
-          ? JSON.parse(features[0].feature_vector)
-          : features[0].feature_vector;
+      // 解析特征向量 - vector 类型返回格式为 '[1,2,3,...]'
+      const vectorString = featuresResult.rows[0].feature_vector;
+      const featureVector = JSON.parse(vectorString) as number[];
 
       const queryTensor = tf.tensor1d(featureVector);
 
       // 查询所有其他图片的特征向量
-      const [allFeatures] = await connection.execute<mysql.RowDataPacket[]>(
+      const allFeaturesResult = await client.query(
         `SELECT 
-          CAST(f.image_id AS CHAR) as image_id,
-          f.feature_vector,
+          f.image_id::text as image_id,
+          f.feature_vector::text as feature_vector,
           i.url,
           i.md5,
           i.file_type
          FROM tb_hsx_img_value f
-         INNER JOIN tb_image i ON CAST(f.image_id AS CHAR) = CAST(i.id AS CHAR)
-         WHERE CAST(f.image_id AS CHAR) != ?
+         INNER JOIN ecai.tb_image i ON f.image_id::text = i.id::text
+         WHERE f.image_id::text != $1
          ORDER BY f.image_id`,
         [imageId]
       );
 
       this.logger.info(
-        `[ImageFeatureService] 找到 ${allFeatures.length} 个特征向量，开始计算相似度...`
+        `[ImageFeatureService] 找到 ${allFeaturesResult.rows.length} 个特征向量，开始计算相似度...`
       );
 
-      if (allFeatures.length === 0) {
+      if (allFeaturesResult.rows.length === 0) {
         queryTensor.dispose();
         return [];
       }
@@ -513,13 +504,10 @@ export class ImageFeatureService {
         fileType?: number;
       }> = [];
 
-      for (const row of allFeatures) {
+      for (const row of allFeaturesResult.rows) {
         try {
-          // 解析特征向量
-          const vector =
-            typeof row.feature_vector === "string"
-              ? JSON.parse(row.feature_vector)
-              : row.feature_vector;
+          // 解析特征向量 - vector 类型返回格式为 '[1,2,3,...]'
+          const vector = JSON.parse(row.feature_vector) as number[];
 
           // 转换为 Tensor
           const dbTensor = tf.tensor1d(vector);
@@ -567,8 +555,8 @@ export class ImageFeatureService {
       );
       throw error;
     } finally {
-      if (connection) {
-        await connection.end();
+      if (client) {
+        await client.end();
       }
     }
   }
@@ -618,7 +606,7 @@ export class ImageFeatureService {
       fileType?: number;
     }>
   > {
-    let connection;
+    let client;
     try {
       // 计算上传图片的特征向量
       this.logger.info("[ImageFeatureService] 开始计算上传图片的特征向量...");
@@ -628,26 +616,26 @@ export class ImageFeatureService {
       const queryTensor = tf.tensor1d(queryFeatureVector);
 
       // 连接数据库
-      connection = await createDbConnection();
+      client = await createDbConnection();
 
       // 查询所有特征向量和对应的图片信息
-      const [features] = await connection.execute<mysql.RowDataPacket[]>(
+      const featuresResult = await client.query(
         `SELECT 
-          CAST(f.image_id AS CHAR) as image_id,
-          f.feature_vector,
+          f.image_id::text as image_id,
+          f.feature_vector::text as feature_vector,
           i.url,
           i.md5,
           i.file_type
          FROM tb_hsx_img_value f
-         INNER JOIN tb_image i ON CAST(f.image_id AS CHAR) = CAST(i.id AS CHAR)
+         INNER JOIN ecai.tb_image i ON f.image_id::text = i.id::text
          ORDER BY f.image_id`
       );
 
       this.logger.info(
-        `[ImageFeatureService] 找到 ${features.length} 个特征向量，开始计算相似度...`
+        `[ImageFeatureService] 找到 ${featuresResult.rows.length} 个特征向量，开始计算相似度...`
       );
 
-      if (features.length === 0) {
+      if (featuresResult.rows.length === 0) {
         queryTensor.dispose();
         return [];
       }
@@ -661,13 +649,10 @@ export class ImageFeatureService {
         fileType?: number;
       }> = [];
 
-      for (const row of features) {
+      for (const row of featuresResult.rows) {
         try {
-          // 解析特征向量
-          const vector =
-            typeof row.feature_vector === "string"
-              ? JSON.parse(row.feature_vector)
-              : row.feature_vector;
+          // 解析特征向量 - vector 类型返回格式为 '[1,2,3,...]'
+          const vector = JSON.parse(row.feature_vector) as number[];
 
           // 转换为 Tensor
           const dbTensor = tf.tensor1d(vector);
@@ -712,8 +697,8 @@ export class ImageFeatureService {
       this.logger.error("[ImageFeatureService] 搜索相似图片失败:", error);
       throw error;
     } finally {
-      if (connection) {
-        await connection.end();
+      if (client) {
+        await client.end();
       }
     }
   }
@@ -800,35 +785,32 @@ export class ImageFeatureService {
     similarityThreshold: number = 0.9,
     _minGroupSimilarity?: number // 未使用，保留用于向后兼容
   ): Promise<string[][]> {
-    let connection;
+    let client;
     try {
-      connection = await createDbConnection();
+      client = await createDbConnection();
 
       // 查询所有特征向量
-      const [features] = await connection.execute<mysql.RowDataPacket[]>(
-        `SELECT CAST(image_id AS CHAR) as image_id, feature_vector 
+      const featuresResult = await client.query(
+        `SELECT image_id::text as image_id, feature_vector::text as feature_vector 
          FROM tb_hsx_img_value 
          ORDER BY image_id`
       );
 
       this.logger.info(
-        `[ImageFeatureService] 找到 ${features.length} 个特征向量，开始计算相似度...`
+        `[ImageFeatureService] 找到 ${featuresResult.rows.length} 个特征向量，开始计算相似度...`
       );
 
-      if (features.length === 0) {
+      if (featuresResult.rows.length === 0) {
         return [];
       }
 
-      // 解析特征向量并转换为 Tensor
+      // 解析特征向量并转换为 Tensor - vector 类型返回格式为 '[1,2,3,...]'
       const imageFeatures: Array<{
         imageId: string;
         vector: number[];
         tensor: tf.Tensor1D;
-      }> = features.map((row: mysql.RowDataPacket) => {
-        const vector =
-          typeof row.feature_vector === "string"
-            ? JSON.parse(row.feature_vector)
-            : row.feature_vector;
+      }> = featuresResult.rows.map((row) => {
+        const vector = JSON.parse(row.feature_vector) as number[];
         return {
           imageId: row.image_id,
           vector,
@@ -961,8 +943,8 @@ export class ImageFeatureService {
       this.logger.error("[ImageFeatureService] 批量计算相似度失败:", error);
       throw error;
     } finally {
-      if (connection) {
-        await connection.end();
+      if (client) {
+        await client.end();
       }
     }
   }
@@ -983,9 +965,9 @@ export class ImageFeatureService {
       }>;
     }>
   > {
-    let connection;
+    let client;
     try {
-      connection = await createDbConnection();
+      client = await createDbConnection();
 
       // 先调用现有方法获取图片ID分组
       const imageIdGroups = await this.findSimilarImages(similarityThreshold);
@@ -997,17 +979,19 @@ export class ImageFeatureService {
       // 获取所有相似图片的ID列表
       const allImageIds = imageIdGroups.flat();
 
-      // 批量查询图片详细信息
-      const placeholders = allImageIds.map(() => "?").join(",");
-      const [imageRows] = await connection.execute<mysql.RowDataPacket[]>(
+      // 批量查询图片详细信息 - PostgreSQL 使用 $1, $2, ... 占位符
+      const placeholders = allImageIds
+        .map((_, index) => `$${index + 1}`)
+        .join(",");
+      const imageRowsResult = await client.query(
         `SELECT 
-          CAST(id AS CHAR) as id,
+          id::text as id,
           url,
           file_type,
           md5,
           create_time
-         FROM tb_image 
-         WHERE id IN (${placeholders})`,
+         FROM ecai.tb_image 
+         WHERE id::text IN (${placeholders})`,
         allImageIds
       );
 
@@ -1023,7 +1007,7 @@ export class ImageFeatureService {
         }
       >();
 
-      imageRows.forEach((row: mysql.RowDataPacket) => {
+      imageRowsResult.rows.forEach((row) => {
         imageMap.set(row.id, {
           id: row.id,
           url: row.url,
@@ -1060,8 +1044,8 @@ export class ImageFeatureService {
       );
       throw error;
     } finally {
-      if (connection) {
-        await connection.end();
+      if (client) {
+        await client.end();
       }
     }
   }

@@ -1,31 +1,31 @@
 import axios from "axios";
-import mysql from "mysql2/promise";
 import { createDbConnection } from "../app/utils/db.js";
+import { Client } from "pg";
 
 const BASE_URL = "http://localhost:7001";
 
 // 从数据库获取一个真实的图片 ID
 async function getImageIdFromDatabase(): Promise<string | null> {
-  let connection;
+  let client: Client | undefined;
   try {
-    connection = await createDbConnection();
+    client = await createDbConnection();
 
-    // 使用 CAST 确保 BIGINT 作为字符串返回
-    const [rows] = await connection.execute<mysql.RowDataPacket[]>(
-      "SELECT CAST(id AS CHAR) as id FROM tb_image ORDER BY create_time DESC LIMIT 1"
+    // PostgreSQL 使用 ::text 转换
+    const result = await client.query(
+      "SELECT id::text as id FROM tb_image ORDER BY create_time DESC LIMIT 1"
     );
 
-    if (rows.length > 0) {
+    if (result.rows.length > 0) {
       // id 已经是字符串，直接返回
-      return String(rows[0].id);
+      return String(result.rows[0].id);
     }
     return null;
   } catch (error) {
     console.warn("⚠️  无法从数据库获取图片 ID:", (error as Error).message);
     return null;
   } finally {
-    if (connection) {
-      await connection.end();
+    if (client) {
+      await client.end();
     }
   }
 }

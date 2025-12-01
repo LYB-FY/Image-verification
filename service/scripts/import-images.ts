@@ -2,6 +2,7 @@ import { readdir, readFile, stat } from "fs/promises";
 import { join, extname } from "path";
 import { createHash } from "crypto";
 import { createDbConnection } from "../app/utils/db.js";
+import { Client } from "pg";
 
 // 文件类型映射：根据扩展名映射到 smallint
 const FILE_TYPE_MAP: Record<string, number> = {
@@ -34,11 +35,11 @@ function generateId(): bigint {
 
 async function importImages() {
   const imgDir = join(process.cwd(), "app", "public", "img");
-  let connection;
+  let client: Client | undefined;
 
   try {
     console.log("正在连接数据库...");
-    connection = await createDbConnection();
+    client = await createDbConnection();
 
     console.log("✅ 数据库连接成功！\n");
 
@@ -81,17 +82,23 @@ async function importImages() {
         // 获取文件类型
         const fileType = getFileType(ext);
 
-        // 插入数据库
-        await connection.execute(
-          "INSERT INTO tb_image (id, md5, url, file_type) VALUES (?, ?, ?, ?)",
+        // 插入数据库 - PostgreSQL 使用 $1, $2, ... 占位符
+        await client.query(
+          "INSERT INTO tb_image (id, md5, url, file_type) VALUES ($1, $2, $3, $4)",
           [id.toString(), md5, url, fileType]
         );
 
         console.log(`  ✅ 插入成功 - ID: ${id}, MD5: ${md5}, URL: ${url}\n`);
         successCount++;
       } catch (error: any) {
-        console.error(`  ❌ 处理文件 ${fileName} 时出错:`, error.message);
-        errorCount++;
+        // 如果是唯一约束冲突（MD5 已存在），跳过
+        if (error.code === "23505" || error.message.includes("duplicate")) {
+          console.log(`  ⚠️  跳过 - MD5 已存在\n`);
+          skipCount++;
+        } else {
+          console.error(`  ❌ 处理文件 ${fileName} 时出错:`, error.message);
+          errorCount++;
+        }
       }
     }
 
@@ -111,8 +118,8 @@ async function importImages() {
     }
     process.exit(1);
   } finally {
-    if (connection) {
-      await connection.end();
+    if (client) {
+      await client.end();
     }
   }
 }
