@@ -200,7 +200,7 @@ export class ImageFeatureController {
     }
   }
 
-  // 搜索相似图片：通过图片ID或URL
+  // 搜索相似图片：通过图片ID或URL（使用向量索引优化）
   @HTTPMethod({
     method: HTTPMethodEnum.GET,
     path: "/search-by-id-or-url",
@@ -208,12 +208,16 @@ export class ImageFeatureController {
   async searchByIdOrUrl(
     @HTTPQuery({ name: "imageId" }) imageId?: string,
     @HTTPQuery({ name: "imageUrl" }) imageUrl?: string,
-    @HTTPQuery({ name: "threshold" }) threshold?: string
+    @HTTPQuery({ name: "threshold" }) threshold?: string,
+    @HTTPQuery({ name: "limit" }) limit?: string
   ) {
     try {
       // 相似度阈值，默认 0.8（80%）
       const similarityThreshold =
         threshold !== undefined ? parseFloat(threshold) : 0.8;
+
+      // 查询限制，默认 100
+      const searchLimit = limit !== undefined ? parseInt(limit, 10) : 100;
 
       // 验证相似度阈值
       if (
@@ -224,6 +228,14 @@ export class ImageFeatureController {
         return {
           success: false,
           message: "相似度阈值必须在0-1之间",
+        };
+      }
+
+      // 验证查询限制
+      if (isNaN(searchLimit) || searchLimit < 1 || searchLimit > 1000) {
+        return {
+          success: false,
+          message: "查询限制必须在1-1000之间",
         };
       }
 
@@ -239,23 +251,26 @@ export class ImageFeatureController {
       let queryInfo: { type: string; value: string };
 
       if (imageId) {
-        // 根据图片ID搜索
+        // 根据图片ID搜索（使用向量索引优化）
         this.logger.info(
-          `[ImageFeatureController] 根据图片ID搜索相似图片: ${imageId}`
+          `[ImageFeatureController] 根据图片ID搜索相似图片: ${imageId}（限制: ${searchLimit}）`
         );
-        similarImages = await this.imageFeatureService.searchSimilarImagesByImageId(
-          imageId,
-          similarityThreshold
-        );
+        similarImages =
+          await this.imageFeatureService.searchSimilarImagesByImageId(
+            imageId,
+            similarityThreshold,
+            searchLimit
+          );
         queryInfo = { type: "imageId", value: imageId };
       } else {
         // 根据图片URL搜索
         this.logger.info(
-          `[ImageFeatureController] 根据图片URL搜索相似图片: ${imageUrl}`
+          `[ImageFeatureController] 根据图片URL搜索相似图片: ${imageUrl}（限制: ${searchLimit}）`
         );
         similarImages = await this.imageFeatureService.searchSimilarImagesByUrl(
           imageUrl!,
-          similarityThreshold
+          similarityThreshold,
+          searchLimit
         );
         queryInfo = { type: "imageUrl", value: imageUrl! };
       }
@@ -269,6 +284,7 @@ export class ImageFeatureController {
           query: queryInfo,
           count: similarImages.length,
           threshold: similarityThreshold,
+          limit: searchLimit,
           images: similarImages,
         },
       };
@@ -284,18 +300,19 @@ export class ImageFeatureController {
     }
   }
 
-  // 搜索相似图片：接收图片（base64 字符串或文件上传），返回相似度大于90%的图片信息
+  // 搜索相似图片：接收图片（base64 字符串或文件上传），返回相似度大于阈值的图片信息（使用向量索引优化）
   @HTTPMethod({
     method: HTTPMethodEnum.POST,
     path: "/search-similar",
   })
   async searchSimilar(
     @HTTPContext() ctx: Context,
-    @HTTPBody() body?: { image?: string; threshold?: number }
+    @HTTPBody() body?: { image?: string; threshold?: number; limit?: number }
   ) {
     try {
       let imageBuffer: Buffer;
       let similarityThreshold: number;
+      let searchLimit: number;
 
       // 优先尝试从文件上传获取图片
       const files = (ctx.request as any).files || {};
@@ -319,14 +336,21 @@ export class ImageFeatureController {
           };
         }
 
-        // 从查询参数获取阈值（文件上传时通常用查询参数）
+        // 从查询参数获取阈值和限制（文件上传时通常用查询参数）
         const thresholdParam = ctx.query.threshold as string | undefined;
+        const limitParam = ctx.query.limit as string | undefined;
         similarityThreshold =
           thresholdParam !== undefined
             ? parseFloat(thresholdParam)
             : body?.threshold !== undefined && body.threshold !== null
             ? body.threshold
             : 0.8;
+        searchLimit =
+          limitParam !== undefined
+            ? parseInt(limitParam, 10)
+            : body?.limit !== undefined && body.limit !== null
+            ? body.limit
+            : 100;
       } else if (body?.image) {
         // 从 base64 字符串获取图片
         try {
@@ -350,6 +374,9 @@ export class ImageFeatureController {
           body.threshold !== undefined && body.threshold !== null
             ? body.threshold
             : 0.8;
+        // 查询限制，默认 100
+        searchLimit =
+          body.limit !== undefined && body.limit !== null ? body.limit : 100;
       } else {
         return {
           success: false,
@@ -370,10 +397,19 @@ export class ImageFeatureController {
         };
       }
 
-      // 搜索相似图片
+      // 验证查询限制
+      if (isNaN(searchLimit) || searchLimit < 1 || searchLimit > 1000) {
+        return {
+          success: false,
+          message: "查询限制必须在1-1000之间",
+        };
+      }
+
+      // 搜索相似图片（使用向量索引优化）
       const similarImages = await this.imageFeatureService.searchSimilarImages(
         imageBuffer,
-        similarityThreshold
+        similarityThreshold,
+        searchLimit
       );
 
       return {
@@ -384,6 +420,7 @@ export class ImageFeatureController {
         data: {
           count: similarImages.length,
           threshold: similarityThreshold,
+          limit: searchLimit,
           images: similarImages,
         },
       };

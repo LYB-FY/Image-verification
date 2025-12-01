@@ -250,8 +250,8 @@ export class ImageFeatureService {
       // 确保返回一维张量（与 demo 保持一致）
       const features = activation.flatten() as tf.Tensor1D;
 
-      // 转换为数组
-      const featureArray = await features.data();
+      // 转换为数组（使用 dataSync 同步获取，避免异步问题）
+      const featureArray = features.dataSync();
       const featureVector = Array.from(featureArray);
 
       // 清理张量
@@ -436,10 +436,11 @@ export class ImageFeatureService {
     return Math.max(0, Math.min(1, similarity));
   }
 
-  // 根据图片ID搜索相似图片
+  // 根据图片ID搜索相似图片（使用 PostgreSQL 向量索引优化）
   async searchSimilarImagesByImageId(
     imageId: string,
-    similarityThreshold: number = 0.8
+    similarityThreshold: number = 0.8,
+    limit: number = 100
   ): Promise<
     Array<{
       imageId: string;
@@ -453,7 +454,7 @@ export class ImageFeatureService {
 
       // 查询指定图片的特征向量
       const featuresResult = await client.query(
-        `SELECT feature_vector::text as feature_vector
+        `SELECT feature_vector
          FROM tb_hsx_img_value 
          WHERE image_id::text = $1`,
         [imageId]
@@ -463,81 +464,58 @@ export class ImageFeatureService {
         throw new Error(`图片 ID ${imageId} 的特征向量不存在，请先处理该图片`);
       }
 
-      // 解析特征向量 - vector 类型返回格式为 '[1,2,3,...]'
-      const vectorString = featuresResult.rows[0].feature_vector;
-      const featureVector = JSON.parse(vectorString) as number[];
+      const queryVector = featuresResult.rows[0].feature_vector;
 
-      const queryTensor = tf.tensor1d(featureVector);
-
-      // 查询所有其他图片的特征向量
-      const allFeaturesResult = await client.query(
-        `SELECT 
-          f.image_id::text as image_id,
-          f.feature_vector::text as feature_vector,
-          i.url
-         FROM tb_hsx_img_value f
-         INNER JOIN ecai.tb_image i ON f.image_id::text = i.id::text
-         WHERE f.image_id::text != $1
-         ORDER BY f.image_id`,
-        [imageId]
-      );
-
-      this.logger.info(
-        `[ImageFeatureService] 找到 ${allFeaturesResult.rows.length} 个特征向量，开始计算相似度...`
-      );
-
-      if (allFeaturesResult.rows.length === 0) {
-        queryTensor.dispose();
-        return [];
-      }
-
-      // 计算相似度并筛选
-      const similarImages: Array<{
-        imageId: string;
-        url: string;
-        similarity: number;
-      }> = [];
-
-      for (const row of allFeaturesResult.rows) {
+      // 优化 HNSW 索引搜索参数（可选，根据数据量调整）
+      // ef_search 控制搜索时的候选数量，值越大越准确但越慢
+      // 注意：某些 PostgreSQL 版本可能不支持 SET LOCAL，使用 SET 代替
+      try {
+        await client.query("SET LOCAL hnsw.ef_search = 100");
+      } catch (error: any) {
+        // 如果 SET LOCAL 不支持，尝试使用 SET（会话级别）
         try {
-          // 解析特征向量 - vector 类型返回格式为 '[1,2,3,...]'
-          const vector = JSON.parse(row.feature_vector) as number[];
-
-          // 转换为 Tensor
-          const dbTensor = tf.tensor1d(vector);
-
-          // 计算相似度
-          const similarity = this.cosineSimilarity(queryTensor, dbTensor);
-
-          // 清理 Tensor
-          dbTensor.dispose();
-
-          // 如果相似度大于阈值，添加到结果中
-          if (similarity >= similarityThreshold) {
-            similarImages.push({
-              imageId: row.image_id,
-              url: row.url,
-              similarity: Math.round(similarity * 10000) / 100, // 保留两位小数，百分比形式
-            });
-          }
-        } catch (error: any) {
+          await client.query("SET hnsw.ef_search = 100");
+        } catch (e) {
+          // 如果都不支持，忽略（使用默认值）
           this.logger.warn(
-            `[ImageFeatureService] 计算图片 ${row.image_id} 相似度失败: ${error.message}`
+            "[ImageFeatureService] 无法设置 HNSW 搜索参数，使用默认值"
           );
         }
       }
 
-      // 清理查询 Tensor
-      queryTensor.dispose();
+      // 使用 PostgreSQL 向量索引和内置相似度函数
+      // <=> 是余弦距离（1 - 余弦相似度），所以 1 - (<=>) 得到余弦相似度
+      // 余弦距离范围 [0, 2]，相似度阈值转换为距离阈值：distance_threshold = 1 - similarity_threshold
+      const distanceThreshold = 1 - similarityThreshold;
 
-      // 按相似度降序排序
-      similarImages.sort((a, b) => b.similarity - a.similarity);
+      // 使用向量索引进行相似度搜索，限制查询范围
+      // ORDER BY feature_vector <=> $1 会使用 HNSW 索引加速
+      const similarResult = await client.query(
+        `SELECT 
+          f.image_id::text as image_id,
+          i.url,
+          1 - (f.feature_vector <=> $1::vector) as similarity
+         FROM tb_hsx_img_value f
+         INNER JOIN ecai.tb_image i ON f.image_id::text = i.id::text
+         WHERE f.image_id::text != $2
+           AND (f.feature_vector <=> $1::vector) <= $3
+         ORDER BY f.feature_vector <=> $1::vector
+         LIMIT $4`,
+        [queryVector, imageId, distanceThreshold, limit]
+      );
 
       this.logger.info(
-        `[ImageFeatureService] 找到 ${
-          similarImages.length
+        `[ImageFeatureService] 使用向量索引搜索，找到 ${
+          similarResult.rows.length
         } 张相似图片（相似度 >= ${(similarityThreshold * 100).toFixed(0)}%）`
       );
+
+      // 格式化结果
+      const similarImages = similarResult.rows.map((row) => ({
+        imageId: row.image_id,
+        url: row.url,
+        similarity: Math.round(Number(row.similarity) * 10000) / 100, // 保留两位小数，百分比形式
+      }));
 
       return similarImages;
     } catch (error) {
@@ -553,10 +531,11 @@ export class ImageFeatureService {
     }
   }
 
-  // 根据图片URL搜索相似图片
+  // 根据图片URL搜索相似图片（使用向量索引优化）
   async searchSimilarImagesByUrl(
     imageUrl: string,
-    similarityThreshold: number = 0.8
+    similarityThreshold: number = 0.8,
+    limit: number = 100
   ): Promise<
     Array<{
       imageId: string;
@@ -572,8 +551,12 @@ export class ImageFeatureService {
       // 从 URL 加载图片
       const imageBuffer = await this.loadImageFromSource(imageUrl);
 
-      // 使用现有的 searchSimilarImages 方法
-      return await this.searchSimilarImages(imageBuffer, similarityThreshold);
+      // 使用优化后的 searchSimilarImages 方法
+      return await this.searchSimilarImages(
+        imageBuffer,
+        similarityThreshold,
+        limit
+      );
     } catch (error) {
       this.logger.error(
         "[ImageFeatureService] 根据URL搜索相似图片失败:",
@@ -583,10 +566,11 @@ export class ImageFeatureService {
     }
   }
 
-  // 搜索相似图片：接收图片 Buffer，返回相似度大于阈值的图片信息
+  // 搜索相似图片：接收图片 Buffer，返回相似度大于阈值的图片信息（使用 PostgreSQL 向量索引优化）
   async searchSimilarImages(
     imageBuffer: Buffer,
-    similarityThreshold: number = 0.8
+    similarityThreshold: number = 0.8,
+    limit: number = 100
   ): Promise<
     Array<{
       imageId: string;
@@ -601,78 +585,47 @@ export class ImageFeatureService {
       const queryFeatureVector = await this.computeFeatureVectorFromBuffer(
         imageBuffer
       );
-      const queryTensor = tf.tensor1d(queryFeatureVector);
 
       // 连接数据库
       client = await createDbConnection();
 
-      // 查询所有特征向量和对应的图片信息
-      const featuresResult = await client.query(
+      // 将特征向量转换为 PostgreSQL vector 类型格式
+      const vectorString = `[${queryFeatureVector.join(",")}]`;
+
+      // 优化 HNSW 索引搜索参数（可选，根据数据量调整）
+      await client.query("SET LOCAL hnsw.ef_search = 100");
+
+      // 余弦距离阈值：distance_threshold = 1 - similarity_threshold
+      const distanceThreshold = 1 - similarityThreshold;
+
+      // 使用 PostgreSQL 向量索引进行相似度搜索
+      // ORDER BY feature_vector <=> $1::vector 会使用 HNSW 索引加速
+      // 只查询相似度大于阈值的图片，并限制返回数量
+      const similarResult = await client.query(
         `SELECT 
           f.image_id::text as image_id,
-          f.feature_vector::text as feature_vector,
-          i.url
+          i.url,
+          1 - (f.feature_vector <=> $1::vector) as similarity
          FROM tb_hsx_img_value f
          INNER JOIN ecai.tb_image i ON f.image_id::text = i.id::text
-         ORDER BY f.image_id`
+         WHERE (f.feature_vector <=> $1::vector) <= $2
+         ORDER BY f.feature_vector <=> $1::vector
+         LIMIT $3`,
+        [vectorString, distanceThreshold, limit]
       );
 
       this.logger.info(
-        `[ImageFeatureService] 找到 ${featuresResult.rows.length} 个特征向量，开始计算相似度...`
-      );
-
-      if (featuresResult.rows.length === 0) {
-        queryTensor.dispose();
-        return [];
-      }
-
-      // 计算相似度并筛选
-      const similarImages: Array<{
-        imageId: string;
-        url: string;
-        similarity: number;
-      }> = [];
-
-      for (const row of featuresResult.rows) {
-        try {
-          // 解析特征向量 - vector 类型返回格式为 '[1,2,3,...]'
-          const vector = JSON.parse(row.feature_vector) as number[];
-
-          // 转换为 Tensor
-          const dbTensor = tf.tensor1d(vector);
-
-          // 计算相似度
-          const similarity = this.cosineSimilarity(queryTensor, dbTensor);
-
-          // 清理 Tensor
-          dbTensor.dispose();
-
-          // 如果相似度大于阈值，添加到结果中
-          if (similarity >= similarityThreshold) {
-            similarImages.push({
-              imageId: row.image_id,
-              url: row.url,
-              similarity: Math.round(similarity * 10000) / 100, // 保留两位小数，百分比形式
-            });
-          }
-        } catch (error: any) {
-          this.logger.warn(
-            `[ImageFeatureService] 计算图片 ${row.image_id} 相似度失败: ${error.message}`
-          );
-        }
-      }
-
-      // 清理查询 Tensor
-      queryTensor.dispose();
-
-      // 按相似度降序排序
-      similarImages.sort((a, b) => b.similarity - a.similarity);
-
-      this.logger.info(
-        `[ImageFeatureService] 找到 ${
-          similarImages.length
+        `[ImageFeatureService] 使用向量索引搜索，找到 ${
+          similarResult.rows.length
         } 张相似图片（相似度 >= ${(similarityThreshold * 100).toFixed(0)}%）`
       );
+
+      // 格式化结果
+      const similarImages = similarResult.rows.map((row) => ({
+        imageId: row.image_id,
+        url: row.url,
+        similarity: Math.round(Number(row.similarity) * 10000) / 100, // 保留两位小数，百分比形式
+      }));
 
       return similarImages;
     } catch (error) {
