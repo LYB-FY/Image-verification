@@ -41,7 +41,7 @@ async function getImageUrlFromDatabase(): Promise<string | null> {
   try {
     client = await createDbConnection();
     const result = await client.query(
-      "SELECT i.url FROM tb_image i INNER JOIN tb_hsx_img_value f ON i.id::text = f.image_id::text LIMIT 1"
+      "SELECT i.url FROM ecai.tb_image i INNER JOIN tb_hsx_img_value f ON i.id::text = f.image_id::text LIMIT 1"
     );
 
     if (result.rows.length > 0) {

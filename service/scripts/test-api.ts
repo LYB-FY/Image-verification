@@ -12,7 +12,7 @@ async function getImageIdFromDatabase(): Promise<string | null> {
 
     // PostgreSQL 使用 ::text 转换
     const result = await client.query(
-      "SELECT id::text as id FROM tb_image ORDER BY create_time DESC LIMIT 1"
+      "SELECT id::text as id FROM ecai.tb_image ORDER BY id DESC LIMIT 1"
     );
 
     if (result.rows.length > 0) {

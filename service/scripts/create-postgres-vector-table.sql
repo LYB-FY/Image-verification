@@ -1,5 +1,5 @@
 -- PostgreSQL 向量表结构（使用 pgvector 扩展）
--- 注意：tb_image 表在 ecai 模式中
+-- 注意：tb_image 表在 ecai 模式中，只包含 id 和 url 字段
 
 -- 启用 pgvector 扩展（如果未安装，需要先安装：CREATE EXTENSION IF NOT EXISTS vector;）
 CREATE EXTENSION IF NOT EXISTS vector;

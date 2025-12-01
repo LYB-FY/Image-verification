@@ -34,37 +34,6 @@ export default defineConfigFactory((appInfo) => {
     sourceUrl: `https://github.com/eggjs/examples/tree/master/${appInfo.name}`,
   };
 
-  // sequelize database config
-  const sequelize = {
-    dialect: "mysql" as const,
-    host: "127.0.0.1",
-    port: 3306,
-    database: "demo",
-    username: "root",
-    password: "root",
-    timezone: "+08:00",
-    define: {
-      freezeTableName: true,
-      underscored: false,
-      charset: "utf8mb4",
-      dialectOptions: {
-        collate: "utf8mb4_unicode_ci",
-      },
-    },
-  };
-
-  // mysql2 database config (for direct connection)
-  const mysql = {
-    host: "127.0.0.1",
-    port: 3306,
-    user: "root",
-    password: "root",
-    database: "demo",
-    supportBigNumbers: true,
-    bigNumberStrings: true,
-    charset: "utf8mb4",
-  };
-
   // PostgreSQL database config
   const postgres = {
     host: "47.96.138.112",
@@ -78,8 +47,6 @@ export default defineConfigFactory((appInfo) => {
   return {
     ...config,
     bizConfig,
-    sequelize,
-    mysql,
     postgres,
   };
 });

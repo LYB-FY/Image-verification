@@ -1,30 +1,7 @@
-import { readdir, readFile, stat } from "fs/promises";
-import { join, extname } from "path";
-import { createHash } from "crypto";
+import { readdir, stat } from "fs/promises";
+import { join } from "path";
 import { createDbConnection } from "../app/utils/db.js";
 import { Client } from "pg";
-
-// 文件类型映射：根据扩展名映射到 smallint
-const FILE_TYPE_MAP: Record<string, number> = {
-  ".png": 1,
-  ".jpg": 2,
-  ".jpeg": 2,
-  ".JPG": 2,
-  ".gif": 3,
-  ".webp": 4,
-};
-
-// 获取文件类型
-function getFileType(ext: string): number {
-  const normalizedExt = ext.toLowerCase();
-  return FILE_TYPE_MAP[normalizedExt] || 0;
-}
-
-// 计算文件的 MD5 值
-async function calculateMD5(filePath: string): Promise<string> {
-  const fileBuffer = await readFile(filePath);
-  return createHash("md5").update(fileBuffer).digest("hex");
-}
 
 // 生成 bigint 类型的 id（使用时间戳 + 随机数）
 function generateId(): bigint {
@@ -66,34 +43,26 @@ async function importImages() {
     // 处理每个文件
     for (const fileName of imageFiles) {
       try {
-        const filePath = join(imgDir, fileName);
-        const ext = extname(fileName);
-
-        // 计算 MD5
         console.log(`处理文件: ${fileName}...`);
-        const md5 = await calculateMD5(filePath);
 
         // 生成 id
         const id = generateId();
 
-        // 构建 URL：https://assets.ecaisys.com/similarity/{文件名}.{扩展名}
+        // 构建 URL：https://assets.ecaisys.com/similarity/{文件名}
         const url = `https://assets.ecaisys.com/similarity/${fileName}`;
 
-        // 获取文件类型
-        const fileType = getFileType(ext);
-
-        // 插入数据库 - PostgreSQL 使用 $1, $2, ... 占位符
+        // 插入数据库 - PostgreSQL 使用 $1, $2 占位符
         await client.query(
-          "INSERT INTO tb_image (id, md5, url, file_type) VALUES ($1, $2, $3, $4)",
-          [id.toString(), md5, url, fileType]
+          "INSERT INTO ecai.tb_image (id, url) VALUES ($1, $2)",
+          [id.toString(), url]
         );
 
-        console.log(`  ✅ 插入成功 - ID: ${id}, MD5: ${md5}, URL: ${url}\n`);
+        console.log(`  ✅ 插入成功 - ID: ${id}, URL: ${url}\n`);
         successCount++;
       } catch (error: any) {
-        // 如果是唯一约束冲突（MD5 已存在），跳过
+        // 如果是唯一约束冲突，跳过
         if (error.code === "23505" || error.message.includes("duplicate")) {
-          console.log(`  ⚠️  跳过 - MD5 已存在\n`);
+          console.log(`  ⚠️  跳过 - 数据已存在\n`);
           skipCount++;
         } else {
           console.error(`  ❌ 处理文件 ${fileName} 时出错:`, error.message);

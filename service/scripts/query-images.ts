@@ -11,22 +11,19 @@ async function queryImages() {
 
     // 查询前 5 条记录
     const rowsResult = await client.query(
-      "SELECT id::text as id, md5, url, file_type, create_time FROM tb_image ORDER BY create_time DESC LIMIT 5"
+      "SELECT id::text as id, url FROM ecai.tb_image ORDER BY id DESC LIMIT 5"
     );
 
     console.log(`📊 前 5 条记录：\n`);
     for (const row of rowsResult.rows) {
       console.log(`ID: ${row.id}`);
-      console.log(`MD5: ${row.md5}`);
       console.log(`URL: ${row.url}`);
-      console.log(`文件类型: ${row.file_type}`);
-      console.log(`创建时间: ${row.create_time}`);
       console.log("─".repeat(60));
     }
 
     // 查询总数
     const countResult = await client.query(
-      "SELECT COUNT(*) as total FROM tb_image"
+      "SELECT COUNT(*) as total FROM ecai.tb_image"
     );
     console.log(`\n📊 数据库中共有 ${countResult.rows[0].total} 条记录`);
   } catch (error: any) {

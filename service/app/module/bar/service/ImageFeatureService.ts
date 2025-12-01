@@ -445,8 +445,6 @@ export class ImageFeatureService {
       imageId: string;
       url: string;
       similarity: number;
-      md5?: string;
-      fileType?: number;
     }>
   > {
     let client;
@@ -476,9 +474,7 @@ export class ImageFeatureService {
         `SELECT 
           f.image_id::text as image_id,
           f.feature_vector::text as feature_vector,
-          i.url,
-          i.md5,
-          i.file_type
+          i.url
          FROM tb_hsx_img_value f
          INNER JOIN ecai.tb_image i ON f.image_id::text = i.id::text
          WHERE f.image_id::text != $1
@@ -500,8 +496,6 @@ export class ImageFeatureService {
         imageId: string;
         url: string;
         similarity: number;
-        md5?: string;
-        fileType?: number;
       }> = [];
 
       for (const row of allFeaturesResult.rows) {
@@ -524,8 +518,6 @@ export class ImageFeatureService {
               imageId: row.image_id,
               url: row.url,
               similarity: Math.round(similarity * 10000) / 100, // 保留两位小数，百分比形式
-              md5: row.md5,
-              fileType: row.file_type,
             });
           }
         } catch (error: any) {
@@ -570,8 +562,6 @@ export class ImageFeatureService {
       imageId: string;
       url: string;
       similarity: number;
-      md5?: string;
-      fileType?: number;
     }>
   > {
     try {
@@ -602,8 +592,6 @@ export class ImageFeatureService {
       imageId: string;
       url: string;
       similarity: number;
-      md5?: string;
-      fileType?: number;
     }>
   > {
     let client;
@@ -623,9 +611,7 @@ export class ImageFeatureService {
         `SELECT 
           f.image_id::text as image_id,
           f.feature_vector::text as feature_vector,
-          i.url,
-          i.md5,
-          i.file_type
+          i.url
          FROM tb_hsx_img_value f
          INNER JOIN ecai.tb_image i ON f.image_id::text = i.id::text
          ORDER BY f.image_id`
@@ -645,8 +631,6 @@ export class ImageFeatureService {
         imageId: string;
         url: string;
         similarity: number;
-        md5?: string;
-        fileType?: number;
       }> = [];
 
       for (const row of featuresResult.rows) {
@@ -669,8 +653,6 @@ export class ImageFeatureService {
               imageId: row.image_id,
               url: row.url,
               similarity: Math.round(similarity * 10000) / 100, // 保留两位小数，百分比形式
-              md5: row.md5,
-              fileType: row.file_type,
             });
           }
         } catch (error: any) {
@@ -959,9 +941,6 @@ export class ImageFeatureService {
       images: Array<{
         id: string;
         url: string;
-        fileType: number;
-        md5: string;
-        createTime: string;
       }>;
     }>
   > {
@@ -986,10 +965,7 @@ export class ImageFeatureService {
       const imageRowsResult = await client.query(
         `SELECT 
           id::text as id,
-          url,
-          file_type,
-          md5,
-          create_time
+          url
          FROM ecai.tb_image 
          WHERE id::text IN (${placeholders})`,
         allImageIds
@@ -1001,9 +977,6 @@ export class ImageFeatureService {
         {
           id: string;
           url: string;
-          fileType: number;
-          md5: string;
-          createTime: string;
         }
       >();
 
@@ -1011,9 +984,6 @@ export class ImageFeatureService {
         imageMap.set(row.id, {
           id: row.id,
           url: row.url,
-          fileType: row.file_type,
-          md5: row.md5,
-          createTime: row.create_time,
         });
       });
 

@@ -41,9 +41,8 @@
     "canvas": "^3.2.0",
     "egg": "beta",
     "egg-cors": "^3.0.1",
-    "egg-sequelize": "^6.0.0",
-    "mysql2": "^3.15.3",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "pgvector": "^0.2.0"
   },
   "devDependencies": {
     "@eggjs/bin": "beta",
