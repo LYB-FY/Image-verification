@@ -11,43 +11,30 @@ services:
     environment:
       - NODE_ENV=production
       - EGG_SERVER_ENV=prod
-      # Database configuration - update these values
-      - MYSQL_HOST=mysql
-      - MYSQL_PORT=3306
-      - MYSQL_USER=root
-      - MYSQL_PASSWORD=your_password
-      - MYSQL_DATABASE=image_verification
-    depends_on:
-      mysql:
-        condition: service_healthy
+      # PostgreSQL database configuration - connect to external database
+      - POSTGRES_HOST=47.96.138.112
+      - POSTGRES_PORT=15432
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=EerwkVA@m-e9*CNW
+      - POSTGRES_DATABASE=postgres
+      # Alternative environment variable names (also supported)
+      - PG_HOST=47.96.138.112
+      - PG_PORT=15432
+      - PG_USER=postgres
+      - PG_PASSWORD=EerwkVA@m-e9*CNW
+      - PG_DATABASE=postgres
     restart: unless-stopped
-    networks:
-      - app-network
     volumes:
       - ./logs:/app/logs
-
-  mysql:
-    image: mysql:8.0
-    container_name: image-verification-mysql
-    ports:
-      - "3306:3306"
-    environment:
-      - MYSQL_ROOT_PASSWORD=your_password
-      - MYSQL_DATABASE=image_verification
-    volumes:
-      - mysql-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-    networks:
-      - app-network
-
-networks:
-  app-network:
-    driver: bridge
-
-volumes:
-  mysql-data:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:7001', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})",
+        ]
+      interval: 30s
+      timeout: 3s
+      start_period: 40s
+      retries: 3

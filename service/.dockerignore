@@ -3,12 +3,12 @@ node_modules/
 npm-debug.log*
 # package-lock.json - DO NOT IGNORE, needed for npm ci
 
-# Build outputs
+# Build outputs (will be generated during build)
 dist/
 .egg/
 run/
 
-# Logs
+# Logs (will be created at runtime)
 logs/
 *.log
 
@@ -17,6 +17,7 @@ coverage/
 test/
 *.test.ts
 *.test.js
+*.test.d.ts
 
 # Development files
 .vscode/
@@ -25,7 +26,7 @@ test/
 *.swo
 *~
 
-# Environment files
+# Environment files (use docker-compose environment variables instead)
 .env
 .env.local
 .env.*.local
@@ -38,17 +39,19 @@ Thumbs.db
 .git/
 .gitignore
 
-# Documentation
+# Documentation (not needed in production image)
 README.md
 *.md
 !DATABASE-CONFIG.md
 !ENV-EXAMPLE.md
 !QUICK-START-DB-CONFIG.md
 
-# Scripts (optional - keep if needed in production)
+# Scripts (not needed in production, only for development)
 scripts/
 
-# TypeScript config - tsconfig.json is needed for build!
-# tsconfig.json - DO NOT IGNORE
+# Test and build configs (not needed in production)
 vitest.config.ts
+
+# TypeScript config - tsconfig.json is NEEDED for build!
+# tsconfig.json - DO NOT IGNORE (commented out to ensure it's included)
 
