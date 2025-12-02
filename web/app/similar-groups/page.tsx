@@ -47,7 +47,7 @@ export default function SimilarGroupsPage() {
 
     try {
       const response = await fetch(
-        `http://127.0.0.1:7001/api/image-feature/similar-groups?threshold=${threshold}`
+        `http://8.141.100.214:7001/api/image-feature/similar-groups?threshold=${threshold}`
       );
 
       const data: ApiResponse = await response.json();

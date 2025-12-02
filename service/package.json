@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "eggctl start --daemon --title=egg-server-serves",
+    "start": "eggctl start --title=egg-server-serves",
     "stop": "eggctl stop --title=egg-server-serves",
     "predev": "npm run clean",
     "dev": "egg-bin dev",
