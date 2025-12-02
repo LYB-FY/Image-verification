@@ -7,7 +7,72 @@ import * as mobilenet from "@tensorflow-models/mobilenet";
 import { createCanvas, loadImage } from "canvas";
 import axios from "axios";
 import { readFile } from "fs/promises";
-import { join } from "path";
+import { join, dirname, extname } from "path";
+import { existsSync } from "fs";
+import { createServer } from "http";
+
+/**
+ * 启动本地 HTTP 服务器来提供模型文件
+ */
+function startLocalModelServer(
+  modelDir: string
+): Promise<{ url: string; server: any }> {
+  return new Promise((resolve, reject) => {
+    const port = 8888; // 使用固定端口
+    const server = createServer(async (req, res) => {
+      try {
+        // 获取请求的文件路径
+        const filePath = join(modelDir, req.url?.replace(/^\//, "") || "");
+
+        if (!existsSync(filePath)) {
+          res.writeHead(404, { "Content-Type": "text/plain" });
+          res.end("File not found");
+          return;
+        }
+
+        // 读取文件
+        const fileContent = await readFile(filePath);
+
+        // 设置 Content-Type
+        const ext = extname(filePath);
+        const contentType: Record<string, string> = {
+          ".json": "application/json",
+          ".bin": "application/octet-stream",
+          "": "application/octet-stream",
+        };
+
+        res.writeHead(200, {
+          "Content-Type": contentType[ext] || "application/octet-stream",
+          "Access-Control-Allow-Origin": "*",
+        });
+        res.end(fileContent);
+      } catch (error: any) {
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end(`Error: ${error.message}`);
+      }
+    });
+
+    server.listen(port, "127.0.0.1", () => {
+      const url = `http://127.0.0.1:${port}`;
+      console.log(`本地模型服务器已启动: ${url}`);
+      resolve({ url, server });
+    });
+
+    server.on("error", (error: any) => {
+      if (error.code === "EADDRINUSE") {
+        // 端口已被占用，尝试使用另一个端口
+        const newPort = port + 1;
+        server.listen(newPort, "127.0.0.1", () => {
+          const url = `http://127.0.0.1:${newPort}`;
+          console.log(`本地模型服务器已启动（使用端口 ${newPort}）: ${url}`);
+          resolve({ url, server });
+        });
+      } else {
+        reject(error);
+      }
+    });
+  });
+}
 
 /**
  * 从 ecai.tb_image 读取所有图片，计算向量并存入向量表
@@ -15,6 +80,7 @@ import { join } from "path";
 async function importAllImagesToVector() {
   let client;
   let model: mobilenet.MobileNet | null = null;
+  let modelServer: any = null;
 
   try {
     console.log("正在连接 PostgreSQL 数据库...");
@@ -28,11 +94,52 @@ async function importAllImagesToVector() {
 
     // 加载 MobileNet 模型
     console.log("正在加载 MobileNetV2 模型...");
-    model = await mobilenet.load({
-      version: 2,
-      alpha: 1.0,
-    });
-    console.log("✅ MobileNetV2 模型加载成功！\n");
+
+    // 获取本地模型路径
+    const modelPath =
+      process.env.MOBILENET_MODEL_PATH ||
+      join(process.cwd(), "models", "mobilenet_v2_1.0_224", "model.json");
+    const modelDir = dirname(modelPath);
+
+    if (existsSync(modelPath)) {
+      console.log(`从本地文件加载模型: ${modelPath}`);
+      try {
+        // 启动本地 HTTP 服务器来提供模型文件
+        const { url, server } = await startLocalModelServer(modelDir);
+        modelServer = server;
+
+        // 使用 HTTP URL 加载模型
+        const modelUrl = `${url}/model.json`;
+        console.log(`使用本地服务器 URL: ${modelUrl}`);
+
+        model = await mobilenet.load({
+          version: 2,
+          alpha: 1.0,
+          modelUrl: modelUrl,
+        });
+        console.log("✅ MobileNetV2 模型从本地文件加载成功！\n");
+      } catch (localError: any) {
+        console.warn(`从本地文件加载失败: ${localError.message}`);
+        console.warn(`错误堆栈: ${localError.stack}`);
+        if (modelServer) {
+          modelServer.close();
+          modelServer = null;
+        }
+        console.warn("尝试从网络加载...");
+        model = await mobilenet.load({
+          version: 2,
+          alpha: 1.0,
+        });
+        console.log("✅ MobileNetV2 模型从网络加载成功！\n");
+      }
+    } else {
+      console.log(`本地模型文件不存在: ${modelPath}，从网络加载`);
+      model = await mobilenet.load({
+        version: 2,
+        alpha: 1.0,
+      });
+      console.log("✅ MobileNetV2 模型从网络加载成功！\n");
+    }
 
     // 查询所有图片
     console.log("正在查询 ecai.tb_image 表中的所有图片...");
@@ -229,6 +336,11 @@ async function importAllImagesToVector() {
     if (model) {
       // TensorFlow.js 模型不需要显式清理
       tf.disposeVariables();
+    }
+    // 关闭本地模型服务器
+    if (modelServer) {
+      modelServer.close();
+      console.log("本地模型服务器已关闭");
     }
     if (client) {
       await client.end();

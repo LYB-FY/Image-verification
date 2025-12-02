@@ -5,7 +5,9 @@ import * as mobilenet from "@tensorflow-models/mobilenet";
 import { createCanvas, loadImage } from "canvas";
 import axios from "axios";
 import { readFile } from "fs/promises";
-import { join } from "path";
+import { join, dirname, extname } from "path";
+import { existsSync } from "fs";
+import { createServer } from "http";
 import { createDbConnection } from "../../../utils/db.js";
 
 @SingletonProto({
@@ -18,6 +20,8 @@ export class ImageFeatureService {
   private model: mobilenet.MobileNet | null = null;
   private modelLoading: Promise<void> | null = null;
   private fetchInitialized: boolean = false;
+  private modelServer: any = null;
+  private modelServerUrl: string | null = null;
 
   // 初始化 fetch（如果需要）
   private async ensureFetch(): Promise<void> {
@@ -50,6 +54,97 @@ export class ImageFeatureService {
     this.fetchInitialized = true;
   }
 
+  // 获取本地模型路径
+  private getLocalModelPath(): string {
+    // 优先使用环境变量指定的路径
+    const envPath = process.env.MOBILENET_MODEL_PATH;
+    if (envPath) {
+      return envPath;
+    }
+
+    // 默认路径：项目根目录下的 models 文件夹
+    const defaultPath = join(
+      process.cwd(),
+      "models",
+      "mobilenet_v2_1.0_224",
+      "model.json"
+    );
+    return defaultPath;
+  }
+
+  // 启动本地 HTTP 服务器来提供模型文件
+  private async startLocalModelServer(modelDir: string): Promise<string> {
+    // 如果服务器已经启动，返回现有 URL
+    if (this.modelServer && this.modelServerUrl) {
+      return this.modelServerUrl;
+    }
+
+    return new Promise((resolve, reject) => {
+      const port = 8888; // 使用固定端口
+      const server = createServer(async (req, res) => {
+        try {
+          // 获取请求的文件路径
+          const filePath = join(modelDir, req.url?.replace(/^\//, "") || "");
+
+          if (!existsSync(filePath)) {
+            res.writeHead(404, { "Content-Type": "text/plain" });
+            res.end("File not found");
+            return;
+          }
+
+          // 读取文件
+          const fileContent = await readFile(filePath);
+
+          // 设置 Content-Type
+          const ext = extname(filePath);
+          const contentType: Record<string, string> = {
+            ".json": "application/json",
+            ".bin": "application/octet-stream",
+            "": "application/octet-stream",
+          };
+
+          res.writeHead(200, {
+            "Content-Type": contentType[ext] || "application/octet-stream",
+            "Access-Control-Allow-Origin": "*",
+          });
+          res.end(fileContent);
+        } catch (error: any) {
+          this.logger.error(
+            `[ImageFeatureService] 模型服务器错误: ${error.message}`
+          );
+          res.writeHead(500, { "Content-Type": "text/plain" });
+          res.end(`Error: ${error.message}`);
+        }
+      });
+
+      server.listen(port, "127.0.0.1", () => {
+        const url = `http://127.0.0.1:${port}`;
+        this.modelServer = server;
+        this.modelServerUrl = url;
+        this.logger.info(`[ImageFeatureService] 本地模型服务器已启动: ${url}`);
+        resolve(url);
+      });
+
+      server.on("error", (error: any) => {
+        if (error.code === "EADDRINUSE") {
+          // 端口已被占用，尝试使用另一个端口
+          const newPort = port + 1;
+          server.listen(newPort, "127.0.0.1", () => {
+            const url = `http://127.0.0.1:${newPort}`;
+            this.modelServer = server;
+            this.modelServerUrl = url;
+            this.logger.info(
+              `[ImageFeatureService] 本地模型服务器已启动（使用端口 ${newPort}）: ${url}`
+            );
+            resolve(url);
+          });
+        } else {
+          reject(error);
+        }
+      });
+    });
+  }
+
   // 初始化并加载 MobileNetV2 模型
   private async loadModel(): Promise<void> {
     if (this.model) {
@@ -64,16 +159,59 @@ export class ImageFeatureService {
       try {
         this.logger.info("[ImageFeatureService] 开始加载 MobileNetV2 模型...");
 
-        // 确保 fetch 可用
+        // 确保 fetch 可用（如果从网络加载）
         await this.ensureFetch();
 
-        // 配置模型加载选项
+        // 尝试从本地文件加载
+        const localModelPath = this.getLocalModelPath();
+        const modelDir = dirname(localModelPath);
+
+        if (existsSync(localModelPath)) {
+          this.logger.info(
+            `[ImageFeatureService] 从本地文件加载模型: ${localModelPath}`
+          );
+          try {
+            // 启动本地 HTTP 服务器来提供模型文件
+            const serverUrl = await this.startLocalModelServer(modelDir);
+            const modelUrl = `${serverUrl}/model.json`;
+
+            this.logger.info(
+              `[ImageFeatureService] 使用本地服务器 URL 加载模型: ${modelUrl}`
+            );
+            this.model = await mobilenet.load({
+              version: 2,
+              alpha: 1.0,
+              modelUrl: modelUrl,
+            });
+            this.logger.info(
+              "[ImageFeatureService] MobileNetV2 模型从本地文件加载成功"
+            );
+            return;
+          } catch (localError: any) {
+            this.logger.warn(
+              `[ImageFeatureService] 从本地文件加载失败: ${localError.message}`
+            );
+            this.logger.warn(
+              `[ImageFeatureService] 错误堆栈: ${localError.stack}`
+            );
+            this.logger.warn(`[ImageFeatureService] 尝试从网络加载...`);
+          }
+        } else {
+          this.logger.warn(
+            `[ImageFeatureService] 本地模型文件不存在: ${localModelPath}，尝试从网络加载`
+          );
+        }
+
+        // 如果本地文件不存在或加载失败，尝试从网络加载
+        this.logger.info("[ImageFeatureService] 从网络加载模型...");
         this.model = await mobilenet.load({
           version: 2,
           alpha: 1.0,
         });
 
-        this.logger.info("[ImageFeatureService] MobileNetV2 模型加载成功");
+        this.logger.info(
+          "[ImageFeatureService] MobileNetV2 模型从网络加载成功"
+        );
       } catch (error: any) {
         this.logger.error("[ImageFeatureService] 模型加载失败:", error);
         this.logger.error("[ImageFeatureService] 错误详情:", {
@@ -87,8 +225,10 @@ export class ImageFeatureService {
           this.logger.error("[ImageFeatureService] 网络请求失败，可能的原因：");
           this.logger.error("  1. 网络连接问题，无法访问模型 CDN");
           this.logger.error("  2. 防火墙或代理设置阻止了请求");
-          this.logger.error("  3. 需要配置代理或使用镜像源");
-          this.logger.error("  建议：检查网络连接，或考虑使用本地模型文件");
+          this.logger.error("  3. 需要配置代理或使用本地模型文件");
+          this.logger.error(
+            `  建议：将模型文件下载到 ${this.getLocalModelPath()} 目录`
+          );
         }
 
         this.modelLoading = null;

@@ -29,7 +29,8 @@
     "query-images": "tsx scripts/query-images.ts",
     "create-feature-table": "tsx scripts/create-feature-table.ts",
     "test-api": "tsx scripts/test-api.ts",
-    "test-search-api": "tsx scripts/test-search-api.ts"
+    "test-search-api": "tsx scripts/test-search-api.ts",
+    "download-model": "node scripts/download-model.js"
   },
   "dependencies": {
     "@eggjs/multipart": "^5.0.0-beta.34",

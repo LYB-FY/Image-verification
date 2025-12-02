@@ -58,6 +58,20 @@ async function initializeBackend(): Promise<void> {
 }
 
 /**
+ * 获取本地模型 URL
+ */
+function getLocalModelUrl(): string {
+  // 优先使用环境变量指定的 URL
+  if (process.env.NEXT_PUBLIC_MOBILENET_MODEL_URL) {
+    return process.env.NEXT_PUBLIC_MOBILENET_MODEL_URL;
+  }
+
+  // 默认路径：从 public 目录加载
+  // Next.js 的 public 目录下的文件可以通过根路径访问
+  return "/models/mobilenet_v2_1.0_224/model.json";
+}
+
+/**
  * 加载 MobileNet 模型
  */
 async function loadModel(): Promise<mobilenet.MobileNet> {
@@ -65,10 +79,31 @@ async function loadModel(): Promise<mobilenet.MobileNet> {
   await initializeBackend();
 
   if (!model) {
-    model = await mobilenet.load({
-      version: 2,
-      alpha: 1.0,
-    });
+    // 尝试从本地文件加载
+    const localModelUrl = getLocalModelUrl();
+
+    try {
+      console.log(`尝试从本地文件加载模型: ${localModelUrl}`);
+      model = await mobilenet.load({
+        version: 2,
+        alpha: 1.0,
+        modelUrl: localModelUrl,
+      });
+      console.log("MobileNetV2 模型从本地文件加载成功");
+    } catch (localError: any) {
+      console.warn(`从本地文件加载失败: ${localError.message}，尝试从网络加载`);
+      // 如果本地文件不存在或加载失败，尝试从网络加载
+      try {
+        model = await mobilenet.load({
+          version: 2,
+          alpha: 1.0,
+        });
+        console.log("MobileNetV2 模型从网络加载成功");
+      } catch (networkError: any) {
+        console.error("模型加载失败:", networkError);
+        throw new Error(`无法加载模型: ${networkError.message}`);
+      }
+    }
   }
   return model;
 }
