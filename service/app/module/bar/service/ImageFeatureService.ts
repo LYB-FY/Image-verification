@@ -145,6 +145,29 @@ export class ImageFeatureService {
     });
   }
 
+  /**
+   * 预加载模型（在应用启动时调用）
+   * 这个方法会在后台加载模型，确保后续使用无需等待
+   */
+  public async preloadModel(): Promise<void> {
+    this.logger.info("[ImageFeatureService] 开始预加载 MobileNetV2 模型...");
+    try {
+      await this.loadModel();
+      this.logger.info("[ImageFeatureService] ✅ MobileNetV2 模型预加载完成");
+    } catch (error: any) {
+      this.logger.error("[ImageFeatureService] ❌ 模型预加载失败:", error);
+      // 预加载失败不影响服务启动，后续使用时可以重试
+      throw error;
+    }
+  }
+
+  /**
+   * 检查模型是否已加载
+   */
+  public isModelLoaded(): boolean {
+    return this.model !== null;
+  }
+
   // 初始化并加载 MobileNetV2 模型
   private async loadModel(): Promise<void> {
     if (this.model) {

@@ -154,7 +154,7 @@ export default function ImageSimilarityChecker() {
         </button>
       </div>
 
-      {loading && <div className="loading">正在加载模型并计算相似度...</div>}
+      {loading && <div className="loading">正在计算相似度...</div>}
 
       {similarity !== null && (
         <div className="result-section">

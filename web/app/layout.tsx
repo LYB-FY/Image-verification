@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import ModelLoader from "@/components/ModelLoader";
 
 export const metadata: Metadata = {
   title: "图片相似度校验工具",
@@ -13,7 +14,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="zh-CN">
-      <body>{children}</body>
+      <body>
+        <ModelLoader />
+        {children}
+      </body>
     </html>
   );
 }

@@ -3,6 +3,8 @@ import * as mobilenet from "@tensorflow-models/mobilenet";
 
 let model: mobilenet.MobileNet | null = null;
 let backendInitialized = false;
+let modelLoadingPromise: Promise<mobilenet.MobileNet> | null = null;
+let modelLoaded = false;
 
 /**
  * 初始化 TensorFlow.js 后端
@@ -72,13 +74,23 @@ function getLocalModelUrl(): string {
 }
 
 /**
- * 加载 MobileNet 模型
+ * 加载 MobileNet 模型（内部函数）
  */
-async function loadModel(): Promise<mobilenet.MobileNet> {
+async function loadModelInternal(): Promise<mobilenet.MobileNet> {
   // 确保后端已初始化
   await initializeBackend();
 
-  if (!model) {
+  if (model) {
+    return model;
+  }
+
+  // 如果正在加载，等待加载完成
+  if (modelLoadingPromise) {
+    return modelLoadingPromise;
+  }
+
+  // 开始加载模型
+  modelLoadingPromise = (async () => {
     // 尝试从本地文件加载
     const localModelUrl = getLocalModelUrl();
 
@@ -90,6 +102,8 @@ async function loadModel(): Promise<mobilenet.MobileNet> {
         modelUrl: localModelUrl,
       });
       console.log("MobileNetV2 模型从本地文件加载成功");
+      modelLoaded = true;
+      return model;
     } catch (localError: any) {
       console.warn(`从本地文件加载失败: ${localError.message}，尝试从网络加载`);
       // 如果本地文件不存在或加载失败，尝试从网络加载
@@ -99,13 +113,42 @@ async function loadModel(): Promise<mobilenet.MobileNet> {
           alpha: 1.0,
         });
         console.log("MobileNetV2 模型从网络加载成功");
+        modelLoaded = true;
+        return model;
       } catch (networkError: any) {
         console.error("模型加载失败:", networkError);
+        modelLoadingPromise = null;
         throw new Error(`无法加载模型: ${networkError.message}`);
       }
     }
+  })();
+
+  return modelLoadingPromise;
+}
+
+/**
+ * 加载 MobileNet 模型（公开函数，用于按需加载）
+ */
+async function loadModel(): Promise<mobilenet.MobileNet> {
+  return loadModelInternal();
+}
+
+/**
+ * 预加载 MobileNet 模型（在应用启动时调用）
+ * @returns Promise，模型加载完成后 resolve
+ */
+export async function preloadModel(): Promise<mobilenet.MobileNet> {
+  if (modelLoaded && model) {
+    return model;
   }
-  return model;
+  return loadModelInternal();
+}
+
+/**
+ * 检查模型是否已加载
+ */
+export function isModelLoaded(): boolean {
+  return modelLoaded && model !== null;
 }
 
 /**
