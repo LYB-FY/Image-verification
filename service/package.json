@@ -30,6 +30,7 @@
     "create-feature-table": "tsx scripts/create-feature-table.ts",
     "test-api": "tsx scripts/test-api.ts",
     "test-search-api": "tsx scripts/test-search-api.ts",
+    "test-test-api": "tsx scripts/test-test-api.ts",
     "download-model": "node scripts/download-model.js"
   },
   "dependencies": {
