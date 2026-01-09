@@ -95,7 +95,7 @@ export default function ImageSearchPage() {
         formData.append("file", imageFile);
 
         response = await fetch(
-          `http://8.141.100.214:7001/api/image-feature/search-similar?threshold=${threshold}`,
+          `http://localhost:7001/api/image-feature/search-similar?threshold=${threshold}`,
           {
             method: "POST",
             body: formData,
@@ -110,7 +110,7 @@ export default function ImageSearchPage() {
         }
 
         response = await fetch(
-          `http://8.141.100.214:7001/api/image-feature/search-by-id-or-url?imageId=${encodeURIComponent(
+          `http://localhost:7001/api/image-feature/search-by-id-or-url?imageId=${encodeURIComponent(
             imageId
           )}&threshold=${threshold}`,
           {
@@ -126,7 +126,7 @@ export default function ImageSearchPage() {
         }
 
         response = await fetch(
-          `http://8.141.100.214:7001/api/image-feature/search-by-id-or-url?imageUrl=${encodeURIComponent(
+          `http://localhost:7001/api/image-feature/search-by-id-or-url?imageUrl=${encodeURIComponent(
             imageUrl
           )}&threshold=${threshold}`,
           {

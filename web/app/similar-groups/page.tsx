@@ -47,7 +47,7 @@ export default function SimilarGroupsPage() {
 
     try {
       const response = await fetch(
-        `http://8.141.100.214:7001/api/image-feature/similar-groups?threshold=${threshold}`
+        `http://localhost:7001/api/image-feature/similar-groups?threshold=${threshold}`
       );
 
       const data: ApiResponse = await response.json();
@@ -206,9 +206,6 @@ export default function SimilarGroupsPage() {
                         ID: {image.id.slice(0, 12)}...
                       </div>
                       <div className="image-meta">
-                        <span title={image.md5}>
-                          MD5: {image.md5.slice(0, 8)}...
-                        </span>
                         <span title={image.createTime}>
                           {formatDate(image.createTime)}
                         </span>

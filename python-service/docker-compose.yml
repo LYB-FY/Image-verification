@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  python-service:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_HOST=${POSTGRES_HOST:-47.96.138.112}
+      - POSTGRES_PORT=${POSTGRES_PORT:-15432}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-EerwkVA@m-e9*CNW}
+      - POSTGRES_DATABASE=${POSTGRES_DATABASE:-postgres}
+    volumes:
+      - .:/app
+    # 如果需要GPU支持，取消下面的注释
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
