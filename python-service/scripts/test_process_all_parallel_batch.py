@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-测试并行处理所有图片接口
+测试批量并行处理所有图片接口（每个线程处理100张图片）
 """
 import requests
 import json
@@ -36,15 +36,16 @@ def print_result(data, show_failed_ids=False):
             print(f"  失败ID（前10个）: {failed_ids[:10]}...")
 
 
-def test_parallel_basic():
-    """测试基本并行处理（小批量）"""
-    print_section("测试1: 基本并行处理（前20张图片）")
+def test_parallel_batch_basic():
+    """测试基本批量并行处理（小批量）"""
+    print_section("测试1: 基本批量并行处理（前200张图片，每个线程100张）")
     
     payload = {
-        "limit": 20,
+        "limit": 200,
         "skip_processed": True,
         "force_reprocess": False,
-        "max_workers": 4
+        "max_workers": 2,
+        "batch_size_per_thread": 100
     }
     
     print(f"请求参数: {json.dumps(payload, indent=2, ensure_ascii=False)}")
@@ -53,7 +54,7 @@ def test_parallel_basic():
     start_time = time.time()
     try:
         response = requests.post(
-            f"{BASE_URL}/process/all/parallel",
+            f"{BASE_URL}/process/all/parallel-batch",
             json=payload,
             timeout=600  # 10分钟超时
         )
@@ -77,9 +78,9 @@ def test_parallel_basic():
         traceback.print_exc()
 
 
-def test_parallel_different_workers():
+def test_parallel_batch_different_workers():
     """测试不同线程数的性能对比"""
-    print_section("测试2: 不同线程数性能对比（前50张图片）")
+    print_section("测试2: 不同线程数性能对比（前500张图片，每个线程100张）")
     
     test_cases = [
         {"max_workers": 2, "name": "2线程"},
@@ -92,18 +93,19 @@ def test_parallel_different_workers():
     for test_case in test_cases:
         print(f"\n--- 测试 {test_case['name']} ---")
         payload = {
-            "limit": 50,
+            "limit": 500,
             "skip_processed": True,
             "force_reprocess": False,
-            "max_workers": test_case['max_workers']
+            "max_workers": test_case['max_workers'],
+            "batch_size_per_thread": 100
         }
         
         start_time = time.time()
         try:
             response = requests.post(
-                f"{BASE_URL}/process/all/parallel",
+                f"{BASE_URL}/process/all/parallel-batch",
                 json=payload,
-                timeout=600
+                timeout=1200  # 20分钟超时
             )
             elapsed_time = time.time() - start_time
             
@@ -148,184 +150,172 @@ def test_parallel_different_workers():
         print(f"\n最快配置: {fastest['workers']} 线程 ({fastest['speed']:.2f} 张/秒)")
 
 
-def test_parallel_vs_serial():
-    """对比并行处理和串行处理的性能"""
-    print_section("测试3: 并行处理 vs 串行处理性能对比（前30张图片）")
+def test_parallel_batch_vs_parallel():
+    """对比批量并行处理和单张并行处理的性能"""
+    print_section("测试3: 批量并行处理 vs 单张并行处理性能对比（前300张图片）")
     
-    test_limit = 30
+    test_limit = 300
     
-    # 测试串行处理
-    print("\n--- 串行处理 ---")
-    serial_payload = {
+    # 测试单张并行处理
+    print("\n--- 单张并行处理（每个线程1张）---")
+    single_payload = {
         "limit": test_limit,
         "skip_processed": True,
-        "force_reprocess": False
+        "force_reprocess": False,
+        "max_workers": 4
     }
     
-    serial_start = time.time()
+    single_start = time.time()
     try:
-        serial_response = requests.post(
-            f"{BASE_URL}/process/all",
-            json=serial_payload,
-            timeout=600
+        single_response = requests.post(
+            f"{BASE_URL}/process/all/parallel",
+            json=single_payload,
+            timeout=1200
         )
-        serial_time = time.time() - serial_start
+        single_time = time.time() - single_start
         
-        if serial_response.status_code == 200:
-            serial_data = serial_response.json()
-            serial_processed = serial_data.get('processed', 0)
-            serial_speed = serial_processed / serial_time if serial_time > 0 else 0
-            print(f"  耗时: {serial_time:.2f} 秒")
-            print(f"  处理: {serial_processed} 张")
-            print(f"  速度: {serial_speed:.2f} 张/秒")
+        if single_response.status_code == 200:
+            single_data = single_response.json()
+            single_processed = single_data.get('processed', 0)
+            single_speed = single_processed / single_time if single_time > 0 else 0
+            print(f"  耗时: {single_time:.2f} 秒")
+            print(f"  处理: {single_processed} 张")
+            print(f"  速度: {single_speed:.2f} 张/秒")
         else:
-            print(f"  错误: {serial_response.status_code}")
-            serial_time = 0
-            serial_speed = 0
+            print(f"  错误: {single_response.status_code}")
+            single_time = 0
+            single_speed = 0
     except Exception as e:
         print(f"  请求失败: {e}")
-        serial_time = 0
-        serial_speed = 0
+        single_time = 0
+        single_speed = 0
     
     time.sleep(2)
     
-    # 测试并行处理
-    print("\n--- 并行处理（4线程）---")
-    parallel_payload = {
+    # 测试批量并行处理
+    print("\n--- 批量并行处理（每个线程100张）---")
+    batch_payload = {
         "limit": test_limit,
         "skip_processed": True,
         "force_reprocess": False,
-        "max_workers": 4
+        "max_workers": 4,
+        "batch_size_per_thread": 100
     }
     
-    parallel_start = time.time()
+    batch_start = time.time()
     try:
-        parallel_response = requests.post(
-            f"{BASE_URL}/process/all/parallel",
-            json=parallel_payload,
-            timeout=600
+        batch_response = requests.post(
+            f"{BASE_URL}/process/all/parallel-batch",
+            json=batch_payload,
+            timeout=1200
         )
-        parallel_time = time.time() - parallel_start
+        batch_time = time.time() - batch_start
         
-        if parallel_response.status_code == 200:
-            parallel_data = parallel_response.json()
-            parallel_processed = parallel_data.get('processed', 0)
-            parallel_speed = parallel_processed / parallel_time if parallel_time > 0 else 0
-            print(f"  耗时: {parallel_time:.2f} 秒")
-            print(f"  处理: {parallel_processed} 张")
-            print(f"  速度: {parallel_speed:.2f} 张/秒")
+        if batch_response.status_code == 200:
+            batch_data = batch_response.json()
+            batch_processed = batch_data.get('processed', 0)
+            batch_speed = batch_processed / batch_time if batch_time > 0 else 0
+            print(f"  耗时: {batch_time:.2f} 秒")
+            print(f"  处理: {batch_processed} 张")
+            print(f"  速度: {batch_speed:.2f} 张/秒")
         else:
-            print(f"  错误: {parallel_response.status_code}")
-            parallel_time = 0
-            parallel_speed = 0
+            print(f"  错误: {batch_response.status_code}")
+            batch_time = 0
+            batch_speed = 0
     except Exception as e:
         print(f"  请求失败: {e}")
-        parallel_time = 0
-        parallel_speed = 0
+        batch_time = 0
+        batch_speed = 0
     
     # 对比结果
-    if serial_time > 0 and parallel_time > 0:
-        speedup = serial_time / parallel_time
+    if single_time > 0 and batch_time > 0:
+        speedup = single_time / batch_time
         print("\n" + "-" * 70)
         print("性能对比:")
-        print(f"  串行处理: {serial_time:.2f} 秒 ({serial_speed:.2f} 张/秒)")
-        print(f"  并行处理: {parallel_time:.2f} 秒 ({parallel_speed:.2f} 张/秒)")
+        print(f"  单张并行处理: {single_time:.2f} 秒 ({single_speed:.2f} 张/秒)")
+        print(f"  批量并行处理: {batch_time:.2f} 秒 ({batch_speed:.2f} 张/秒)")
         print(f"  加速比: {speedup:.2f}x")
         if speedup > 1:
-            print(f"  ✓ 并行处理快 {speedup:.2f} 倍")
+            print(f"  ✓ 批量并行处理快 {speedup:.2f} 倍")
         else:
-            print(f"  ⚠ 并行处理未显示优势（可能数据量太小）")
+            print(f"  ⚠ 批量并行处理未显示优势")
 
 
-def test_parallel_custom_config():
-    """测试自定义配置"""
-    print_section("测试4: 自定义配置测试（前100张图片）")
+def test_parallel_batch_custom_batch_size():
+    """测试不同批次大小的性能"""
+    print_section("测试4: 不同批次大小性能对比（前400张图片，4线程）")
     
-    payload = {
-        "limit": 100,
-        "skip_processed": True,
-        "force_reprocess": False,
-        "max_workers": 6  # 自定义线程数
-    }
+    test_cases = [
+        {"batch_size": 50, "name": "每线程50张"},
+        {"batch_size": 100, "name": "每线程100张"},
+        {"batch_size": 200, "name": "每线程200张"},
+    ]
     
-    print(f"请求参数:")
-    print(f"  最大线程数: {payload['max_workers']}")
-    print(f"  限制数量: {payload['limit']}")
-    print("\n开始处理...")
+    results = []
     
-    start_time = time.time()
-    try:
-        response = requests.post(
-            f"{BASE_URL}/process/all/parallel",
-            json=payload,
-            timeout=1200  # 20分钟超时
-        )
-        elapsed_time = time.time() - start_time
+    for test_case in test_cases:
+        print(f"\n--- 测试 {test_case['name']} ---")
+        payload = {
+            "limit": 400,
+            "skip_processed": True,
+            "force_reprocess": False,
+            "max_workers": 4,
+            "batch_size_per_thread": test_case['batch_size']
+        }
         
-        print(f"\n状态码: {response.status_code}")
-        print(f"处理耗时: {elapsed_time:.2f} 秒 ({elapsed_time/60:.2f} 分钟)")
-        
-        if response.status_code == 200:
-            data = response.json()
-            print_result(data, show_failed_ids=True)
+        start_time = time.time()
+        try:
+            response = requests.post(
+                f"{BASE_URL}/process/all/parallel-batch",
+                json=payload,
+                timeout=1200
+            )
+            elapsed_time = time.time() - start_time
             
-            if data.get('processed', 0) > 0:
-                speed = data.get('processed', 0) / elapsed_time if elapsed_time > 0 else 0
-                print(f"\n处理速度: {speed:.2f} 张/秒")
-        else:
-            print(f"错误: {response.text}")
-    except Exception as e:
-        print(f"请求失败: {e}")
-        import traceback
-        traceback.print_exc()
-
-
-def test_parallel_force_reprocess():
-    """测试强制重新处理"""
-    print_section("测试5: 强制重新处理（前10张图片）")
-    
-    payload = {
-        "limit": 10,
-        "skip_processed": False,
-        "force_reprocess": True,
-        "max_workers": 4
-    }
-    
-    print("警告: 这将强制重新处理已存在的图片")
-    print("按 Ctrl+C 取消，或等待3秒后继续...")
-    
-    try:
-        time.sleep(3)
-    except KeyboardInterrupt:
-        print("\n已取消")
-        return
-    
-    print("\n开始处理...")
-    start_time = time.time()
-    
-    try:
-        response = requests.post(
-            f"{BASE_URL}/process/all/parallel",
-            json=payload,
-            timeout=300
-        )
-        elapsed_time = time.time() - start_time
+            if response.status_code == 200:
+                data = response.json()
+                processed = data.get('processed', 0)
+                success = data.get('success', 0)
+                speed = processed / elapsed_time if elapsed_time > 0 else 0
+                
+                result = {
+                    'batch_size': test_case['batch_size'],
+                    'time': elapsed_time,
+                    'processed': processed,
+                    'success': success,
+                    'speed': speed
+                }
+                results.append(result)
+                
+                print(f"  耗时: {elapsed_time:.2f} 秒")
+                print(f"  处理: {processed} 张")
+                print(f"  成功: {success} 张")
+                print(f"  速度: {speed:.2f} 张/秒")
+            else:
+                print(f"  错误: {response.status_code}")
+        except Exception as e:
+            print(f"  请求失败: {e}")
         
-        print(f"\n状态码: {response.status_code}")
-        print(f"处理耗时: {elapsed_time:.2f} 秒")
+        # 等待一下，避免请求过快
+        time.sleep(2)
+    
+    # 打印对比结果
+    if results:
+        print("\n" + "-" * 70)
+        print("性能对比:")
+        print(f"{'批次大小':<12} {'耗时(秒)':<12} {'处理数':<10} {'成功数':<10} {'速度(张/秒)':<15}")
+        print("-" * 70)
+        for r in results:
+            print(f"{r['batch_size']:<12} {r['time']:<12.2f} {r['processed']:<10} {r['success']:<10} {r['speed']:<15.2f}")
         
-        if response.status_code == 200:
-            data = response.json()
-            print_result(data)
-        else:
-            print(f"错误: {response.text}")
-    except Exception as e:
-        print(f"请求失败: {e}")
+        # 找出最快的
+        fastest = max(results, key=lambda x: x['speed'])
+        print(f"\n最快配置: 每线程 {fastest['batch_size']} 张 ({fastest['speed']:.2f} 张/秒)")
 
 
-def test_parallel_large_batch():
-    """测试大批量处理（需要确认）"""
-    print_section("测试6: 大批量并行处理")
+def test_parallel_batch_large():
+    """测试大批量处理"""
+    print_section("测试5: 大批量并行处理")
     
     print("\n警告: 这将处理大量图片，可能需要很长时间！")
     print("请输入要处理的图片数量（直接回车跳过此测试）: ", end="")
@@ -342,6 +332,7 @@ def test_parallel_large_batch():
             return
         
         print(f"\n将处理前 {limit} 张图片")
+        print("配置: 4线程，每个线程100张")
         print("按 Ctrl+C 取消，或等待5秒后继续...")
         time.sleep(5)
         
@@ -349,14 +340,15 @@ def test_parallel_large_batch():
             "limit": limit,
             "skip_processed": True,
             "force_reprocess": False,
-            "max_workers": 32
+            "max_workers": 20,
+            "batch_size_per_thread": 100
         }
         
         print("\n开始处理...")
         start_time = time.time()
         
         response = requests.post(
-            f"{BASE_URL}/process/all/parallel",
+            f"{BASE_URL}/process/all/parallel-batch",
             json=payload,
             timeout=7200  # 2小时超时
         )
@@ -372,7 +364,8 @@ def test_parallel_large_batch():
             if data.get('processed', 0) > 0:
                 speed = data.get('processed', 0) / elapsed_time if elapsed_time > 0 else 0
                 print(f"\n处理速度: {speed:.2f} 张/秒")
-                print(f"预计处理全部图片需要: {data.get('total', 0) / speed / 3600:.2f} 小时")
+                if data.get('total', 0) > 0:
+                    print(f"预计处理全部图片需要: {data.get('total', 0) / speed / 3600:.2f} 小时")
         else:
             print(f"错误: {response.text}")
             
@@ -387,7 +380,7 @@ def test_parallel_large_batch():
 def main():
     """主函数"""
     print("\n" + "=" * 70)
-    print("  并行处理接口测试脚本")
+    print("  批量并行处理接口测试脚本（每个线程处理100张图片）")
     print("=" * 70)
     print(f"\n服务地址: {BASE_URL}")
     print(f"测试时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -408,53 +401,49 @@ def main():
         test_name = sys.argv[1].lower()
         
         if test_name == "basic":
-            test_parallel_basic()
+            test_parallel_batch_basic()
         elif test_name == "workers":
-            test_parallel_different_workers()
+            test_parallel_batch_different_workers()
         elif test_name == "compare":
-            test_parallel_vs_serial()
-        elif test_name == "custom":
-            test_parallel_custom_config()
-        elif test_name == "force":
-            test_parallel_force_reprocess()
+            test_parallel_batch_vs_parallel()
+        elif test_name == "batch":
+            test_parallel_batch_custom_batch_size()
         elif test_name == "large":
-            test_parallel_large_batch()
+            test_parallel_batch_large()
         elif test_name == "all":
-            test_parallel_basic()
-            test_parallel_different_workers()
-            test_parallel_vs_serial()
-            test_parallel_custom_config()
+            test_parallel_batch_basic()
+            test_parallel_batch_different_workers()
+            test_parallel_batch_vs_parallel()
+            test_parallel_batch_custom_batch_size()
         else:
             print(f"未知的测试: {test_name}")
             print_usage()
     else:
         # 默认运行基本测试
-        test_parallel_basic()
-        test_parallel_vs_serial()
+        test_parallel_batch_basic()
+        test_parallel_batch_vs_parallel()
         
         print("\n" + "=" * 70)
         print("提示: 运行更多测试")
         print("=" * 70)
-        print("  python scripts/test_process_all_parallel.py basic    - 基本测试")
-        print("  python scripts/test_process_all_parallel.py workers - 不同线程数对比")
-        print("  python scripts/test_process_all_parallel.py compare  - 并行vs串行对比")
-        print("  python scripts/test_process_all_parallel.py custom   - 自定义配置测试")
-        print("  python scripts/test_process_all_parallel.py force    - 强制重新处理测试")
-        print("  python scripts/test_process_all_parallel.py large    - 大批量处理测试")
-        print("  python scripts/test_process_all_parallel.py all      - 运行所有测试")
+        print("  python scripts/test_process_all_parallel_batch.py basic    - 基本测试")
+        print("  python scripts/test_process_all_parallel_batch.py workers - 不同线程数对比")
+        print("  python scripts/test_process_all_parallel_batch.py compare - 批量vs单张对比")
+        print("  python scripts/test_process_all_parallel_batch.py batch   - 不同批次大小对比")
+        print("  python scripts/test_process_all_parallel_batch.py large    - 大批量处理测试")
+        print("  python scripts/test_process_all_parallel_batch.py all      - 运行所有测试")
         print("=" * 70)
 
 
 def print_usage():
     """打印使用说明"""
     print("\n使用方法:")
-    print("  python scripts/test_process_all_parallel.py [test_name]")
+    print("  python scripts/test_process_all_parallel_batch.py [test_name]")
     print("\n可用的测试:")
-    print("  basic    - 基本并行处理测试")
+    print("  basic    - 基本批量并行处理测试")
     print("  workers  - 不同线程数性能对比")
-    print("  compare  - 并行vs串行性能对比")
-    print("  custom   - 自定义配置测试")
-    print("  force    - 强制重新处理测试")
+    print("  compare  - 批量并行vs单张并行性能对比")
+    print("  batch    - 不同批次大小性能对比")
     print("  large    - 大批量处理测试")
     print("  all      - 运行所有测试")
 

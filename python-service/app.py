@@ -106,6 +106,15 @@ class ProcessAllImagesParallelRequest(BaseModel):
     max_workers: Optional[int] = None  # 最大线程数，None表示使用配置值
 
 
+class ProcessAllImagesParallelBatchRequest(BaseModel):
+    """批量并行处理所有图片请求（每个线程处理100张）"""
+    limit: Optional[int] = None  # 限制处理数量，None表示处理所有
+    skip_processed: bool = True  # 是否跳过已处理的图片
+    force_reprocess: bool = False  # 是否强制重新处理（即使已存在）
+    max_workers: Optional[int] = None  # 最大线程数，None表示使用配置值
+    batch_size_per_thread: int = 100  # 每个线程处理的图片数量
+
+
 @app.on_event("startup")
 async def startup_event():
     """应用启动时初始化模型"""
@@ -665,6 +674,290 @@ async def process_all_images_parallel(request: ProcessAllImagesParallelRequest):
         
     except Exception as e:
         logger.error(f"并行处理所有图片失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _process_batch_images(
+    batch_images: List[tuple],
+    extractor,
+    request: ProcessAllImagesParallelBatchRequest,
+    stats_lock: Lock,
+    stats: dict,
+    total_images: int,
+    processed_count: dict,
+    batch_idx: int,
+    total_batches: int
+) -> None:
+    """处理一批图片（线程安全）
+    
+    Args:
+        batch_images: 图片列表，每个元素为 (image_id, image_url)
+        extractor: 特征提取器
+        request: 请求参数
+        stats_lock: 统计信息锁
+        stats: 统计信息字典
+        total_images: 总图片数
+        processed_count: 处理计数器
+        batch_idx: 当前批次索引
+        total_batches: 总批次数
+    """
+    try:
+        batch_image_ids = [img[0] for img in batch_images]
+        batch_urls = [img[1] for img in batch_images]
+        
+        logger.info(f"[批次 {batch_idx + 1}/{total_batches}] 开始处理 {len(batch_images)} 张图片...")
+        
+        # 检查是否已存在（如果force_reprocess为False）
+        if not request.force_reprocess:
+            existing_ids = check_features_exist_batch(batch_image_ids)
+            if existing_ids:
+                # 过滤掉已存在的图片
+                valid_data = [(img_id, url) for img_id, url in batch_images if img_id not in existing_ids]
+                if len(valid_data) < len(batch_images):
+                    skipped = len(batch_images) - len(valid_data)
+                    with stats_lock:
+                        stats['skipped'] += skipped
+                        processed_count['count'] += skipped
+                    logger.info(f"[批次 {batch_idx + 1}/{total_batches}] 跳过 {skipped} 张已存在的图片")
+                
+                if not valid_data:
+                    logger.info(f"[批次 {batch_idx + 1}/{total_batches}] 本批次所有图片已处理，跳过")
+                    return
+                
+                batch_images = valid_data
+                batch_image_ids = [img[0] for img in batch_images]
+                batch_urls = [img[1] for img in batch_images]
+        
+        # 如果强制重新处理，先删除旧数据
+        if request.force_reprocess:
+            existing_ids = check_features_exist_batch(batch_image_ids)
+            if existing_ids:
+                conn = Database.get_connection()
+                cursor = conn.cursor()
+                existing_ints = [int(img_id) for img_id in existing_ids]
+                cursor.execute("DELETE FROM tb_hsx_img_value WHERE image_id = ANY(%s)", (existing_ints,))
+                conn.commit()
+                cursor.close()
+                Database.return_connection(conn)
+                logger.info(f"[批次 {batch_idx + 1}/{total_batches}] 已删除 {len(existing_ids)} 条旧记录")
+        
+        # 过滤无效URL
+        valid_batch_images = []
+        for image_id, image_url in batch_images:
+            if not image_url:
+                logger.warning(f"[批次 {batch_idx + 1}/{total_batches}] 图片ID {image_id} 没有URL，跳过")
+                with stats_lock:
+                    stats['failed'] += 1
+                    stats['failed_ids'].append(image_id)
+                    processed_count['count'] += 1
+                continue
+            valid_batch_images.append((image_id, image_url))
+        
+        if not valid_batch_images:
+            logger.warning(f"[批次 {batch_idx + 1}/{total_batches}] 本批次没有有效图片")
+            return
+        
+        # 提取URL列表
+        valid_image_ids = [img[0] for img in valid_batch_images]
+        valid_urls = [img[1] for img in valid_batch_images]
+        
+        # 批量下载并提取特征向量
+        try:
+            feature_results = extractor.extract_features_from_urls_batch(
+                valid_urls,
+                batch_size=settings.batch_size
+            )
+        except Exception as e:
+            logger.error(f"[批次 {batch_idx + 1}/{total_batches}] 批量提取特征失败: {e}")
+            # 标记本批次所有图片为失败
+            with stats_lock:
+                for image_id in valid_image_ids:
+                    stats['failed'] += 1
+                    stats['failed_ids'].append(image_id)
+                    processed_count['count'] += 1
+            return
+        
+        # 准备批量保存的数据
+        batch_data = []
+        for image_id, feature_vector in zip(valid_image_ids, feature_results):
+            if feature_vector is not None:
+                dimension = len(feature_vector)
+                batch_data.append((image_id, feature_vector, dimension, "MobileNetV2-GPU"))
+            else:
+                with stats_lock:
+                    stats['failed'] += 1
+                    stats['failed_ids'].append(image_id)
+                    processed_count['count'] += 1
+        
+        # 批量保存到数据库
+        if batch_data:
+            try:
+                # 分批保存，避免单次事务过大
+                db_batch_size = settings.db_batch_size
+                saved_count = 0
+                for i in range(0, len(batch_data), db_batch_size):
+                    db_batch = batch_data[i:i+db_batch_size]
+                    try:
+                        saved = save_feature_vectors_batch(db_batch)
+                        saved_count += saved
+                    except Exception as e:
+                        logger.error(f"[批次 {batch_idx + 1}/{total_batches}] 批量保存失败（子批次 {i//db_batch_size + 1}）: {e}")
+                        # 记录失败的图片ID
+                        with stats_lock:
+                            for img_id, _, _, _ in db_batch:
+                                if img_id not in stats['failed_ids']:
+                                    stats['failed_ids'].append(img_id)
+                                    stats['failed'] += 1
+                                    processed_count['count'] += 1
+                
+                with stats_lock:
+                    stats['success'] += saved_count
+                    processed_count['count'] += len(batch_images)
+                    current_count = processed_count['count']
+                
+                logger.info(f"[批次 {batch_idx + 1}/{total_batches}] 完成：成功 {saved_count}，失败 {len(valid_image_ids) - saved_count}")
+                
+                # 每处理500张图片输出一次进度
+                if current_count % 500 == 0:
+                    logger.info(f"总进度: {current_count}/{total_images} | 成功 {stats['success']}, 失败 {stats['failed']}, 跳过 {stats['skipped']}")
+                    
+            except Exception as e:
+                logger.error(f"[批次 {batch_idx + 1}/{total_batches}] 保存到数据库失败: {e}")
+                with stats_lock:
+                    for image_id in valid_image_ids:
+                        if image_id not in stats['failed_ids']:
+                            stats['failed_ids'].append(image_id)
+                            stats['failed'] += 1
+                            processed_count['count'] += 1
+        else:
+            logger.warning(f"[批次 {batch_idx + 1}/{total_batches}] 没有成功提取的特征向量")
+            with stats_lock:
+                processed_count['count'] += len(batch_images)
+        
+    except Exception as e:
+        logger.error(f"[批次 {batch_idx + 1}/{total_batches}] 处理批次时发生异常: {e}")
+        with stats_lock:
+            for image_id, _ in batch_images:
+                if image_id not in stats['failed_ids']:
+                    stats['failed_ids'].append(image_id)
+                    stats['failed'] += 1
+            processed_count['count'] += len(batch_images)
+
+
+@app.post("/process/all/parallel-batch", response_model=ProcessAllImagesResponse)
+async def process_all_images_parallel_batch(request: ProcessAllImagesParallelBatchRequest):
+    """
+    批量并行处理所有图片：使用多线程，每个线程同时下载和处理100张图片
+    
+    - **limit**: 限制处理数量，None表示处理所有
+    - **skip_processed**: 是否跳过已处理的图片（默认True）
+    - **force_reprocess**: 是否强制重新处理（即使已存在，默认False）
+    - **max_workers**: 最大线程数，None表示使用配置值（默认4）
+    - **batch_size_per_thread**: 每个线程处理的图片数量（默认100）
+    """
+    try:
+        # 获取总图片数
+        total_count = get_total_image_count(skip_processed=request.skip_processed)
+        
+        if total_count == 0:
+            return ProcessAllImagesResponse(
+                total=0,
+                processed=0,
+                success=0,
+                failed=0,
+                skipped=0,
+                failed_ids=[],
+                message="没有需要处理的图片"
+            )
+        
+        # 获取所有图片
+        images = get_all_images(limit=request.limit, skip_processed=request.skip_processed)
+        
+        if not images:
+            return ProcessAllImagesResponse(
+                total=total_count,
+                processed=0,
+                success=0,
+                failed=0,
+                skipped=0,
+                failed_ids=[],
+                message="没有找到需要处理的图片"
+            )
+        
+        # 确定配置参数
+        max_workers = request.max_workers if request.max_workers is not None else settings.parallel_workers
+        batch_size_per_thread = request.batch_size_per_thread
+        
+        logger.info(f"开始批量并行处理 {len(images)} 张图片（总计: {total_count}）")
+        logger.info(f"配置：{max_workers} 个线程，每个线程处理 {batch_size_per_thread} 张图片")
+        
+        extractor = get_feature_extractor()
+        
+        # 将图片分成批次
+        total_batches = (len(images) + batch_size_per_thread - 1) // batch_size_per_thread
+        batches = []
+        for i in range(0, len(images), batch_size_per_thread):
+            batch = images[i:i+batch_size_per_thread]
+            batches.append(batch)
+        
+        logger.info(f"共分成 {total_batches} 个批次，将使用 {max_workers} 个线程并行处理")
+        
+        # 线程安全的统计信息
+        stats_lock = Lock()
+        stats = {
+            'success': 0,
+            'failed': 0,
+            'skipped': 0,
+            'failed_ids': []
+        }
+        
+        # 处理计数器（用于进度显示）
+        processed_count = {'count': 0}
+        
+        # 使用线程池并行处理，每个线程处理一批图片
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有批次处理任务
+            futures = [
+                executor.submit(
+                    _process_batch_images,
+                    batch,
+                    extractor,
+                    request,
+                    stats_lock,
+                    stats,
+                    len(images),
+                    processed_count,
+                    batch_idx,
+                    total_batches
+                )
+                for batch_idx, batch in enumerate(batches)
+            ]
+            
+            # 等待所有任务完成
+            completed = 0
+            for future in as_completed(futures):
+                try:
+                    future.result()  # 获取结果（结果已在函数内部更新统计信息）
+                    completed += 1
+                except Exception as e:
+                    logger.error(f"处理批次任务异常: {e}")
+                    completed += 1
+        
+        message = f"批量并行处理完成：成功 {stats['success']}，失败 {stats['failed']}，跳过 {stats['skipped']}"
+        logger.info(message)
+        
+        return ProcessAllImagesResponse(
+            total=total_count,
+            processed=len(images),
+            success=stats['success'],
+            failed=stats['failed'],
+            skipped=stats['skipped'],
+            failed_ids=stats['failed_ids'],
+            message=message
+        )
+        
+    except Exception as e:
+        logger.error(f"批量并行处理所有图片失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
