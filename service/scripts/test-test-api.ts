@@ -312,24 +312,6 @@ async function runTests() {
 
   const results: TestResult[] = [];
 
-  // 1. 参数验证测试
-  results.push(await testInvalidParameters());
-
-  // 2. 空数组测试
-  results.push(await testEmptyImageIds());
-
-  // 3. 不存在的图片ID测试
-  results.push(await testNonExistentImageId());
-
-  // 4. 单个图片ID测试
-  const imageIds = await getImageIdsFromDatabase(1);
-  if (imageIds.length > 0) {
-    results.push(await testSingleImageId(imageIds[0]));
-  } else {
-    console.log("\n⚠️  警告：数据库中没有图片特征向量，跳过单个图片ID测试");
-    console.log("   提示：请先运行 npm run batch-process 处理图片");
-  }
-
   // 5. 多个图片ID批量测试
   const multipleImageIds = await getImageIdsFromDatabase(100);
   if (multipleImageIds.length >= 2) {

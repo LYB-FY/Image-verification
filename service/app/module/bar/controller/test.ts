@@ -65,57 +65,70 @@ export class TestController {
         });
 
         // 处理每个图片ID，查询相似图片
-        const results = await Promise.all(
-          imageIds.map(async (imageId) => {
-            try {
-              // 获取图片URL
-              const url = imageMap.get(imageId) || "";
+        // 使用并发控制，避免创建过多数据库连接
+        const concurrency = 10; // 最多同时处理10个图片ID
+        const results: Array<{
+          url: string;
+          imageId: string;
+          similarities: string[];
+        }> = [];
 
-              // 如果图片不存在，返回空结果
-              if (!url) {
-                this.logger.warn(
-                  `[TestController] 图片ID ${imageId} 不存在，跳过`
-                );
+        // 分批处理，控制并发数量
+        for (let i = 0; i < imageIds.length; i += concurrency) {
+          const batch = imageIds.slice(i, i + concurrency);
+          const batchResults = await Promise.all(
+            batch.map(async (imageId) => {
+              try {
+                // 获取图片URL
+                const url = imageMap.get(imageId) || "";
+
+                // 如果图片不存在，返回空结果
+                if (!url) {
+                  this.logger.warn(
+                    `[TestController] 图片ID ${imageId} 不存在，跳过`
+                  );
+                  return {
+                    url: "",
+                    imageId: imageId,
+                    similarities: [],
+                  };
+                }
+
+                // 查询相似图片（限制30个，相似度阈值0.9）
+                const similarImages =
+                  await this.imageFeatureService.searchSimilarImagesByImageId(
+                    imageId,
+                    0.9, // 相似度阈值
+                    30 // 限制最多30个
+                  );
+
+                // 格式化相似图片列表，返回URL（也可以返回ID，根据需求调整）
+                const similarities = similarImages.map((img) => {
+                  // 返回相似图片的URL
+                  return img.url;
+                });
+
                 return {
-                  url: "",
+                  url: url,
+                  imageId: imageId,
+                  similarities: similarities,
+                };
+              } catch (error: any) {
+                this.logger.error(
+                  `[TestController] 处理图片ID ${imageId} 失败:`,
+                  error
+                );
+                // 即使某个图片处理失败，也返回结果（相似图片为空）
+                return {
+                  url: imageMap.get(imageId) || "",
                   imageId: imageId,
                   similarities: [],
                 };
               }
-
-              // 查询相似图片（限制30个，相似度阈值0.9）
-              const similarImages =
-                await this.imageFeatureService.searchSimilarImagesByImageId(
-                  imageId,
-                  0.9, // 相似度阈值
-                  30 // 限制最多30个
-                );
-
-              // 格式化相似图片列表，返回URL（也可以返回ID，根据需求调整）
-              const similarities = similarImages.map((img) => {
-                // 返回相似图片的URL
-                return img.url;
-              });
-
-              return {
-                url: url,
-                imageId: imageId,
-                similarities: similarities,
-              };
-            } catch (error: any) {
-              this.logger.error(
-                `[TestController] 处理图片ID ${imageId} 失败:`,
-                error
-              );
-              // 即使某个图片处理失败，也返回结果（相似图片为空）
-              return {
-                url: imageMap.get(imageId) || "",
-                imageId: imageId,
-                similarities: [],
-              };
-            }
-          })
-        );
+            })
+          );
+          results.push(...batchResults);
+        }
 
         this.logger.info(
           `[TestController] 成功处理 ${results.length} 个图片的相似图片查询`
