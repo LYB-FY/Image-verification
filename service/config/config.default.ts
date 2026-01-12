@@ -26,6 +26,13 @@ export default defineConfigFactory((appInfo) => {
       origin: "*", // 允许所有域名访问，生产环境请修改为特定域名
       allowMethods: "GET,HEAD,PUT,POST,DELETE,PATCH",
     },
+
+    // 禁用 CSRF 保护（API 服务通常不需要）
+    security: {
+      csrf: {
+        enable: false,
+      },
+    },
   } as PartialEggConfig;
 
   // add your special config in here

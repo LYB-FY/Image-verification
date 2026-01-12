@@ -1,5 +1,10 @@
-import { defineConfig } from 'egg';
+import { defineConfig } from "egg";
 
 export default defineConfig({
-  // add your config here
+  // 禁用 CSRF 保护（API 服务通常不需要）
+  security: {
+    csrf: {
+      enable: false,
+    },
+  },
 });
